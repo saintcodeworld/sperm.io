@@ -1,0 +1,5 @@
+{
+  "name": "Sperm.io - Biological Battle Arena",
+  "description": "A multiplayer .io game clone with biological aesthetics. Control a sperm cell, collect nutrients, and outmaneuver others to become the longest in the arena.",
+  "requestFramePermissions": []
+}

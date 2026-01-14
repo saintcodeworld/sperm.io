@@ -1,0 +1,15 @@
+{
+  "name": "sperm-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx server.js",
+    "dev": "tsx --watch server.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "@supabase/supabase-js": "2.48.1",
+    "dotenv": "^16.4.5",
+    "tsx": "^4.19.2"
+  }
+}
