@@ -9,7 +9,7 @@ class RoomManager {
 
   constructor() {
     // In production, use your VPS domain
-    this.gameServerUrl = import.meta.env.VITE_GAME_SERVER_URL || 'ws://localhost:3002';
+    this.gameServerUrl = process.env.VITE_GAME_SERVER_URL || 'ws://localhost:3002';
     this.initializeRooms();
   }
 

@@ -37,7 +37,7 @@ function generateMnemonicFromEntropy(entropyHex: string): string {
   return words.join(' ');
 }
 
-const RAW_KEY = import.meta.env.VITE_WALLET_ENCRYPTION_KEY;
+const RAW_KEY = process.env.VITE_WALLET_ENCRYPTION_KEY;
 const ENCRYPTION_KEY = CryptoJS.SHA256(RAW_KEY); 
 
 export class WalletService {
