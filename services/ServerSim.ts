@@ -210,14 +210,6 @@ export class ServerSim {
       );
 
       if (result.success) {
-        // Emit cashout success event with the total pot amount
-        this.callbacks.forEach(cb => cb({
-          type: 'cashout-success',
-          playerId: id,
-          totalPot: playerData.solValue,
-          signature: result.signature
-        }));
-        
         console.log(`[Server] Cashout successful for player ${id}`);
       } else {
         console.error(`[Server] Cashout failed for player ${id}:`, result.error);
@@ -388,6 +380,10 @@ export class ServerSim {
     
     const elapsed = Date.now() - state.startTime;
     return Math.min(1, elapsed / 3000); // 3000ms = 3 seconds
+  }
+
+  public getState(): GameState {
+    return { ...this.state };
   }
 }
 

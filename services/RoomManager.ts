@@ -1,74 +1,114 @@
 import { Room, ROOM_CONFIGS, GameState } from '../types';
-import { ServerSim } from './ServerSim';
+import { wsClient } from './WebSocketClient';
+import { DeathEvent, KillEvent } from './ServerSim';
 
 class RoomManager {
   private rooms: Map<string, Room> = new Map();
-  private roomServers: Map<string, ServerSim> = new Map();
+  private gameServerUrl: string;
+  private connected: boolean = false;
 
   constructor() {
-    // Initialize one room for each entry fee
-    ROOM_CONFIGS.forEach((config) => {
-      this.createRoom(config.entryFee);
-    });
+    // In production, use your VPS domain
+    this.gameServerUrl = import.meta.env.VITE_GAME_SERVER_URL || 'ws://localhost:3002';
+    this.initializeRooms();
   }
 
-  private createRoom(entryFee: number): string {
-    // Create a permanent room ID based on entry fee for consistency
-    const roomId = `room_${entryFee}`;
-    
-    // Only create if room doesn't exist
-    if (!this.rooms.has(roomId)) {
+  private initializeRooms() {
+    ROOM_CONFIGS.forEach((config) => {
+      const roomId = `room_${config.entryFee}`;
       const room: Room = {
         id: roomId,
-        entryFee,
+        entryFee: config.entryFee,
         currentPlayers: 0,
         state: { players: {}, food: {} }
       };
-      
       this.rooms.set(roomId, room);
-      this.roomServers.set(roomId, new ServerSim());
-      
-      console.log(`[RoomManager] Created permanent room ${roomId} with entry fee ${entryFee} SOL`);
+    });
+  }
+
+  async connectToGameServer(): Promise<void> {
+    try {
+      await wsClient.connect(this.gameServerUrl);
+      this.connected = true;
+      console.log('🎮 Connected to multiplayer game server');
+    } catch (error) {
+      console.error('❌ Failed to connect to game server:', error);
+      this.connected = false;
+      throw error;
     }
-    
-    return roomId;
-  }
-
-  public getRoomByFee(entryFee: number): Room | undefined {
-    return Array.from(this.rooms.values()).find(room => room.entryFee === entryFee);
-  }
-
-  public getServer(roomId: string): ServerSim | undefined {
-    return this.roomServers.get(roomId);
   }
 
   public async joinRoom(roomId: string, playerId: string, playerName: string): Promise<boolean> {
     const room = this.rooms.get(roomId);
-    const server = this.roomServers.get(roomId);
-    
-    if (!room || !server) {
+    if (!room) {
+      console.error(`Room ${roomId} not found`);
       return false;
     }
-    
-    const joined = await server.join(playerId, playerName, room.entryFee);
-    if (joined) {
-      room.currentPlayers++;
+
+    if (!this.connected) {
+      console.error('Not connected to game server');
+      return false;
     }
-    return joined;
+
+    try {
+      await wsClient.joinRoom(roomId, playerId, playerName, room.entryFee);
+      room.currentPlayers++;
+      console.log(`✅ ${playerName} joined room ${roomId}`);
+      return true;
+    } catch (error) {
+      console.error('Failed to join room:', error);
+      return false;
+    }
+  }
+
+  public getServer(roomId: string) {
+    // Return WebSocket client interface that mimics ServerSim
+    return {
+      onUpdate: (callback: (state: GameState) => void) => {
+        return wsClient.onGameStateUpdate(callback);
+      },
+      onPlayerDeath: (callback: (event: DeathEvent) => void) => {
+        return wsClient.onPlayerDeath(callback);
+      },
+      onKill: (callback: (event: KillEvent) => void) => {
+        return wsClient.onKill(callback);
+      },
+      input: (playerId: string, angle: number, boost: boolean, cashout: boolean) => {
+        wsClient.sendInput(playerId, angle, boost, cashout);
+      },
+      getPlayerData: (playerId: string) => {
+        // This would need to be implemented via WebSocket or tracked locally
+        return undefined;
+      },
+      getTimeAlive: (playerId: string) => {
+        // This would need to be implemented via WebSocket or tracked locally
+        return 0;
+      },
+      getCashoutProgress: (playerId: string) => {
+        // This would need to be implemented via WebSocket or tracked locally
+        return 0;
+      }
+    };
   }
 
   public leaveRoom(roomId: string, playerId: string): void {
     const room = this.rooms.get(roomId);
-    const server = this.roomServers.get(roomId);
-    
-    if (room && server) {
-      server.leave(playerId);
+    if (room) {
       room.currentPlayers = Math.max(0, room.currentPlayers - 1);
+      console.log(`👋 Player ${playerId} left room ${roomId}`);
     }
   }
 
   public getAvailableRooms(): Room[] {
     return Array.from(this.rooms.values());
+  }
+
+  public isConnected(): boolean {
+    return this.connected;
+  }
+
+  public getConnectionStatus() {
+    return wsClient.getStatus();
   }
 }
 

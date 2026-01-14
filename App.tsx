@@ -62,9 +62,21 @@ const App: React.FC = () => {
       }
     };
 
+    const connectToGameServer = async () => {
+      try {
+        console.log('[App] Connecting to multiplayer game server...');
+        await roomManager.connectToGameServer();
+        console.log('[App] Game server connection established');
+      } catch (error) {
+        console.error('[App] Failed to connect to game server:', error);
+        // Don't block the app, just log the error
+      }
+    };
+
     window.addEventListener('hashchange', handleHashChange);
     handleHashChange();
     restoreUserSession();
+    connectToGameServer();
     
     return () => {
       window.removeEventListener('hashchange', handleHashChange);
