@@ -12,7 +12,19 @@ const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '..', '.env.local') });
 
 // Create HTTP server for Socket.io
-const httpServer = createServer();
+const httpServer = createServer((req, res) => {
+  // Add a health check endpoint for Railway
+  if (req.url === '/') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', message: 'Game server is running' }));
+    return;
+  }
+  
+  // Handle other routes
+  res.writeHead(404);
+  res.end('Not found');
+});
+
 const io = new Server(httpServer, {
   cors: {
     origin: "*", // In production, set to your domain
