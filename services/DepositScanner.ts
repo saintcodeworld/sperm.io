@@ -1,5 +1,6 @@
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { supabaseAdmin } from './SupabaseClient';
+import { transactionHistoryService } from './TransactionHistoryService';
 
 // Strictly using Devnet for development
 const SOLANA_RPC = 'https://api.devnet.solana.com';
@@ -160,6 +161,34 @@ export class DepositScanner {
         }
       } else {
         console.log(`[Scanner] Devnet Deposit finalized: ${signature}`);
+        
+        // Additionally record in transaction history for UI consistency
+        try {
+          // Get user balance after deposit
+          const { data: profile } = await supabaseAdmin
+            .from('profiles')
+            .select('account_balance')
+            .eq('id', userId)
+            .single();
+          
+          const currentBalance = profile?.account_balance || 0;
+          const balanceBefore = currentBalance - amount;
+          
+          // Record deposit in transaction history
+          await transactionHistoryService.recordTransaction(
+            userId,
+            'deposit',
+            amount,
+            balanceBefore,
+            currentBalance,
+            signature,
+            `Deposit from external wallet`
+          );
+          
+          console.log(`[Scanner] Deposit recorded in transaction history: ${amount} SOL for user ${userId}`);
+        } catch (historyErr) {
+          console.error('[Scanner] Failed to record deposit in transaction history:', historyErr);
+        }
       }
     } catch (err: any) {
       console.error('[Scanner] RPC Exception:', JSON.stringify(err, null, 2));

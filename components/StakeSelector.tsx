@@ -18,7 +18,8 @@ export const StakeSelector: React.FC<StakeSelectorProps> = ({ balance, onConfirm
   }, []);
 
   const handleJoinRoom = (room: Room) => {
-    if (balance < room.entryFee) {
+    // Free rooms (0 SOL) are always joinable for testing
+    if (room.entryFee > 0 && balance < room.entryFee) {
       setError('Insufficient balance');
       return;
     }
@@ -34,7 +35,12 @@ export const StakeSelector: React.FC<StakeSelectorProps> = ({ balance, onConfirm
           {rooms.map((room) => (
             <div key={room.id} className="bg-gradient-to-br from-white/5 to-black p-6 rounded-2xl border border-white/10">
               <div className="space-y-4">
-                <h3 className="text-2xl font-mono text-white mb-2">{room.entryFee} SOL</h3>
+                <h3 className="text-2xl font-mono text-white mb-2">
+                  {room.entryFee === 0 ? 'FREE' : `${room.entryFee} SOL`}
+                </h3>
+                {room.entryFee === 0 && (
+                  <p className="text-[10px] text-green-400 uppercase tracking-widest">Testing Mode</p>
+                )}
                 <div className="space-y-2">
                   <p className="text-xs text-gray-400">
                     Active Players: {room.currentPlayers}

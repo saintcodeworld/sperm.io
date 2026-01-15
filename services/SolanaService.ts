@@ -6,9 +6,7 @@ import { transactionHistoryService } from './TransactionHistoryService';
 
 const SOLANA_RPC = 'https://api.devnet.solana.com';
 const PLATFORM_FEE_PERCENT = 0.03;
-const TREASURY_PUBLIC_KEY = typeof process !== 'undefined' && process.env.TREASURY_PUBLIC_KEY 
-  ? process.env.TREASURY_PUBLIC_KEY 
-  : 'GoWZjAXZ7kDyc5PjoCarCoE8VTtnBjWgUZa4TUBZGcjQ';
+const TREASURY_PUBLIC_KEY = process.env.VITE_TREASURY_WALLET_ADDRESS || 'GoWZjAXZ7kDyc5PjoCarCoE8VTtnBjWgUZa4TUBZGcjQ';
 
 export class SolanaService {
   private connection: Connection;

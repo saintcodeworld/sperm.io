@@ -4,6 +4,7 @@ import { supabase } from './SupabaseClient';
 import { authService } from './AuthService';
 import { walletService } from './WalletService';
 import { solanaService } from './SolanaService';
+import { transactionHistoryService } from './TransactionHistoryService';
 
 const PLATFORM_ENTRY_FEE_PERCENT = 0.03; // 3% for entry
 const PLATFORM_CASHOUT_FEE_PERCENT = 0.01; // 1% for cashout
@@ -62,7 +63,12 @@ class GameTransactionService {
       
       // Validate inputs
       if (!playerAddress) throw new Error('Player address is required');
-      if (entryFee <= 0) throw new Error('Entry fee must be greater than zero');
+      
+      // Allow free games (0 entry fee) for testing - skip blockchain transaction
+      if (entryFee <= 0) {
+        console.log('[GameTx] Free game mode - skipping blockchain transaction');
+        return { success: true, signature: 'FREE_GAME_NO_TX' };
+      }
       
       const playerPubkey = new PublicKey(playerAddress);
       const gameWallet = await this.getGameWallet();
@@ -126,6 +132,32 @@ class GameTransactionService {
       await this.connection.confirmTransaction(signature, 'processed');
       console.log(`[GameTx] Entry fee transaction confirmed: ${signature}`);
       
+      // Record the transaction in transaction history
+      try {
+        // Fetch current balance to record the transaction with before/after amounts
+        const userProfile = await supabase
+          .from('profiles')
+          .select('account_balance')
+          .eq('id', userId)
+          .single();
+        
+        const currentBalance = userProfile?.data?.account_balance || 0;
+        const balanceBefore = currentBalance + entryFee + platformFee;
+        
+        await transactionHistoryService.recordTransaction(
+          userId,
+          'game_loss', // Using game_loss for entry fee
+          entryFee + platformFee, 
+          balanceBefore, // Balance before
+          currentBalance, // Balance after
+          signature,
+          `Game entry: ${entryFee.toFixed(4)} SOL + ${platformFee.toFixed(4)} SOL fee`
+        );
+        console.log('[GameTx] Entry fee transaction recorded in history');
+      } catch (dbError) {
+        console.error('[GameTx] Failed to record entry fee in history service:', dbError);
+      }
+      
       return {
         success: true,
         signature
@@ -147,7 +179,12 @@ class GameTransactionService {
       // Validate inputs
       if (!playerAddress) throw new Error('Player address is required');
       if (!playerId) throw new Error('Player ID is required');
-      if (amount <= 0) throw new Error('Cashout amount must be greater than zero');
+      
+      // Allow 0 cashout for free games - skip blockchain transaction
+      if (amount <= 0) {
+        console.log('[GameTx] Free game cashout - skipping blockchain transaction');
+        return { success: true, signature: 'FREE_GAME_NO_TX' };
+      }
       
       const playerPubkey = new PublicKey(playerAddress);
       
@@ -227,19 +264,29 @@ class GameTransactionService {
       await this.connection.confirmTransaction(signature, 'processed');
       console.log(`[GameTx] Cashout transaction confirmed: ${signature}`);
 
-      // Update transaction history in background
+      // Update transaction history using transactionHistoryService for consistency
       try {
-        await supabase.from('transactions').insert({
-          user_id: playerId,
-          type: 'cashout',
-          amount: playerReceives,
-          transaction_hash: signature,
-          description: `Cashout: ${playerReceives.toFixed(4)} SOL`,
-          status: 'confirmed'
-        });
+        // Fetch current balance to record the transaction with before/after amounts
+        const userProfile = await supabase
+          .from('profiles')
+          .select('account_balance')
+          .eq('id', playerId)
+          .single();
+        
+        const currentBalance = userProfile?.data?.account_balance || 0;
+        
+        await transactionHistoryService.recordTransaction(
+          playerId,
+          'game_win', // Using game_win for cashout
+          playerReceives, 
+          currentBalance - playerReceives, // Balance before
+          currentBalance, // Balance after
+          signature,
+          `Game winnings: ${playerReceives.toFixed(4)} SOL`
+        );
         console.log('[GameTx] Transaction recorded in history');
       } catch (dbError) {
-        console.error('[GameTx] Failed to record transaction in database:', dbError);
+        console.error('[GameTx] Failed to record transaction in history service:', dbError);
       }
 
       return { success: true, signature };

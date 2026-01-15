@@ -85,35 +85,42 @@ export class ServerSim {
 
   public async join(id: string, name: string, entryFee: number = 0.1): Promise<boolean> {
     const user = authService.getCurrentUser();
-    if (!user || user.balance < entryFee) {
+    
+    // For free games (0 SOL), skip balance check
+    if (entryFee > 0 && (!user || user.balance < entryFee)) {
       console.error("[Server] Access Denied: Insufficient SOL");
       return false;
     }
     
     try {
-      // 1. Process blockchain transaction first
-      console.log(`[Server] Processing entry fee transaction for player ${id} with ${entryFee} SOL`);
-      
       // Mark this join as processing to avoid duplicates
-      this.pendingJoins.set(id, {name, entryFee, processingBlockchain: true});
+      this.pendingJoins.set(id, {name, entryFee, processingBlockchain: entryFee > 0});
       
-      // Process blockchain transaction with internal wallet
-      const txResult = await gameTransactionService.processEntryFee(
-        user.solAddress,
-        entryFee
-      );
-      
-      if (!txResult.success) {
-        console.error(`[Server] Entry fee transaction failed: ${txResult.error}`);
-        this.pendingJoins.delete(id);
-        return false;
+      // Only process blockchain transaction for paid games
+      if (entryFee > 0 && user) {
+        // 1. Process blockchain transaction first
+        console.log(`[Server] Processing entry fee transaction for player ${id} with ${entryFee} SOL`);
+        
+        // Process blockchain transaction with internal wallet
+        const txResult = await gameTransactionService.processEntryFee(
+          user.solAddress,
+          entryFee
+        );
+        
+        if (!txResult.success) {
+          console.error(`[Server] Entry fee transaction failed: ${txResult.error}`);
+          this.pendingJoins.delete(id);
+          return false;
+        }
+        
+        console.log(`[Server] Entry fee transaction confirmed: ${txResult.signature}`);
+        
+        // 2. Update database balance
+        await authService.deductBalance(entryFee);
+        console.log(`[Server] Balance deducted for entry fee: ${entryFee} SOL`);
+      } else {
+        console.log(`[Server] Free game mode - skipping blockchain transaction for player ${id}`);
       }
-      
-      console.log(`[Server] Entry fee transaction confirmed: ${txResult.signature}`);
-      
-      // 2. Update database balance
-      await authService.deductBalance(entryFee);
-      console.log(`[Server] Balance deducted for entry fee: ${entryFee} SOL`);
 
       // 3. Create player in game state
       this.playerJoinTime.set(id, Date.now());

@@ -71,9 +71,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onPlay, onLogout, on
       );
 
       if (result.success) {
-        await authService.deductBalance(amount);
+        console.log('[Dashboard] Withdrawal successful, syncing real balance from blockchain...');
         
-        // Sync balance with parent component and Supabase in real-time
+        // Sync real balance from blockchain instead of just deducting locally
+        await authService.syncRealBalanceFromBlockchain();
+        
+        // Get the updated user with real blockchain balance
+        const updatedUser = authService.getCurrentUser();
+        if (updatedUser) {
+          console.log('[Dashboard] Updated balance from blockchain:', updatedUser.balance);
+          setCurrentUser({...updatedUser}); // Create new object to trigger re-render
+        }
+        
+        // Sync balance with parent component
         if (onBalanceChange) {
           await onBalanceChange();
         }
@@ -134,6 +144,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onPlay, onLogout, on
       // Sync real balance from blockchain
       await authService.syncRealBalanceFromBlockchain();
       
+      // Get the updated user with real blockchain balance and update local state
+      const updatedUser = authService.getCurrentUser();
+      if (updatedUser) {
+        console.log('[Dashboard] Updated balance from blockchain:', updatedUser.balance);
+        setCurrentUser({...updatedUser}); // Create new object to trigger re-render
+      }
+      
       // Update parent component with new balance
       if (onBalanceChange) {
         await onBalanceChange();
@@ -187,7 +204,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onPlay, onLogout, on
               className="w-12 h-12 rounded-full overflow-hidden border-2 border-white/10 hover:border-white/20 transition-all transform hover:scale-105 active:scale-95"
               title="Settings"
             >
-              {currentUser.photoUrl ? (
+              {currentUser.photoUrl && currentUser.photoUrl.trim() !== '' ? (
                 <img
                   src={currentUser.photoUrl}
                   alt="Profile"

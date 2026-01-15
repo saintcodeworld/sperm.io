@@ -378,20 +378,6 @@ class AuthService {
         throw new Error('User not authenticated');
       }
 
-      // If removing photo, set to empty string directly
-      if (!photoDataUrl || photoDataUrl.trim() === '') {
-        const { error: updateError } = await supabase
-          .from('profiles')
-          .update({ photo_url: null })
-          .eq('id', userId);
-
-        if (updateError) {
-          console.error('[Auth] Profile photo removal failed:', updateError);
-          throw new Error('Failed to remove profile photo');
-        }
-        return '';
-      }
-
       // Validate and compress the image
       const compressedDataUrl = await this.compressImage(photoDataUrl);
       

@@ -136,6 +136,16 @@ const App: React.FC = () => {
         return;
       }
 
+      // Join the player to the server with the entry fee (handles blockchain transaction)
+      const joinSuccess = await roomServer.join(id, currentUser.username, entryFee);
+      if (!joinSuccess) {
+        setError('Failed to join game - transaction may have failed');
+        setIsTransactionLoading(false);
+        return;
+      }
+      
+      console.log(`[App] Player ${id} joined server successfully with ${entryFee} SOL entry fee`);
+
       // Wait a moment for the transaction to process, then start the game
       setTimeout(() => {
         setGameState('PLAYING');
@@ -173,7 +183,7 @@ const App: React.FC = () => {
               if (currentUser) {
                 try {
                   const success = await gameHistoryService.recordGameResult(
-                    currentUser.username,
+                    currentUser.id, // Using UUID instead of username
                     id,
                     Math.floor(event.length || 0),
                     Math.floor(event.score || 0),
@@ -227,7 +237,7 @@ const App: React.FC = () => {
                 if (currentUser) {
                   try {
                     const success = await gameHistoryService.recordGameResult(
-                      currentUser.username,
+                      currentUser.id, // Using UUID instead of username
                       id,
                       Math.floor(playerData?.length || 0),
                       Math.floor(playerData?.score || 0),
@@ -292,6 +302,13 @@ const App: React.FC = () => {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#050505]">
+      {/* Debug Info - only visible in development */}
+      {import.meta.env.DEV && (
+        <div className="absolute top-0 left-0 bg-red-500 text-white p-2 z-[999] text-xs">
+          DEBUG: gameState={gameState}, user={currentUser?.username || 'null'}
+        </div>
+      )}
+      
       {/* Transaction Loading UI */}
       <TransactionLoading 
         isVisible={isTransactionLoading}

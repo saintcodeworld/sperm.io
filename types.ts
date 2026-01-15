@@ -117,6 +117,7 @@ export interface Room {
 }
 
 export const ROOM_CONFIGS = [
+  { entryFee: 0 },    // Free testing room - no blockchain transactions
   { entryFee: 0.1 },
   { entryFee: 0.5 },
   { entryFee: 1.0 }

@@ -3,8 +3,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { ServerSim } from '../services/ServerSim.js';
-import { ROOM_CONFIGS } from '../types.js';
+import { ServerSim } from '../services/ServerSim.ts';
+import { ROOM_CONFIGS } from '../types.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

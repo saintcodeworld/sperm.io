@@ -1,11 +1,11 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// Supabase Connection Details from environment variables
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
+// Supabase Connection Details
+const supabaseUrl = 'https://mjsqomffhxfhfmmklfyl.supabase.co';
 
-// Public Key for Browser usage from environment variables
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY;
+// Public Key for Browser usage
+const supabaseAnonKey = 'sb_publishable_OrFsiS2aWDAp3LIDO6huYg_k9X0qJy9';
 
 // Service Role Key (Only available in Node.js environment)
 const serviceRoleKey = typeof process !== 'undefined' ? process.env.SUPABASE_SERVICE_ROLE_KEY : null;
