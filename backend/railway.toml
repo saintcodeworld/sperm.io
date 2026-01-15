@@ -6,4 +6,3 @@ buildCommand = "npm install"
 startCommand = "npm run game-server"
 healthcheckPath = "/"
 healthcheckTimeout = 100
-restartPolicy = "always"
