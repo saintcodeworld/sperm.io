@@ -83,19 +83,25 @@ class RoomManager {
     }
     
     // Return WebSocket client interface that mimics ServerSim
+    // Track local state for multiplayer mode
+    let localGameState: GameState = { players: {}, food: {} };
+    let cashoutStartTime: number | null = null;
+    let playerJoinTime: number = Date.now();
+    
     return {
       join: async (id: string, name: string, entryFeeAmount: number): Promise<boolean> => {
-        // For WebSocket mode, join is handled via wsClient.joinRoom
-        try {
-          await wsClient.joinRoom(roomId, id, name, entryFeeAmount);
-          return true;
-        } catch (error) {
-          console.error('Failed to join via WebSocket:', error);
-          return false;
-        }
+        // For WebSocket mode, join is handled via wsClient.joinRoom (already called by roomManager.joinRoom)
+        // This method is a no-op for multiplayer since join happens via WebSocket
+        console.log(`[RoomManager] Multiplayer join - already connected via WebSocket for player ${id}`);
+        playerJoinTime = Date.now();
+        return true;
       },
       onUpdate: (callback: (state: GameState) => void) => {
-        return wsClient.onGameStateUpdate(callback);
+        // Wrap callback to track local state for getCashoutProgress, getPlayerData, etc.
+        return wsClient.onGameStateUpdate((state: GameState) => {
+          localGameState = state;
+          callback(state);
+        });
       },
       onPlayerDeath: (callback: (event: DeathEvent) => void) => {
         return wsClient.onPlayerDeath(callback);
@@ -104,19 +110,27 @@ class RoomManager {
         return wsClient.onKill(callback);
       },
       input: (playerId: string, angle: number, boost: boolean, cashout: boolean) => {
+        // Track cashout state locally for progress bar
+        if (cashout && !cashoutStartTime) {
+          cashoutStartTime = Date.now();
+        } else if (!cashout) {
+          cashoutStartTime = null;
+        }
         wsClient.sendInput(playerId, angle, boost, cashout);
       },
       getPlayerData: (playerId: string) => {
-        // This would need to be implemented via WebSocket or tracked locally
-        return undefined;
+        // Return player data from local cached state
+        return localGameState.players[playerId];
       },
       getTimeAlive: (playerId: string) => {
-        // This would need to be implemented via WebSocket or tracked locally
-        return 0;
+        // Calculate time since player joined
+        return Math.floor((Date.now() - playerJoinTime) / 1000);
       },
       getCashoutProgress: (playerId: string) => {
-        // This would need to be implemented via WebSocket or tracked locally
-        return 0;
+        // Calculate cashout progress locally (3 second timer)
+        if (!cashoutStartTime) return 0;
+        const elapsed = Date.now() - cashoutStartTime;
+        return Math.min(1, elapsed / 3000);
       }
     };
   }

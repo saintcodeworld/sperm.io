@@ -207,10 +207,11 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3002;
-httpServer.listen(PORT, () => {
-  console.log(`🎮 Multiplayer game server running on port ${PORT}`);
-  console.log(`🌐 WebSocket endpoint: ws://localhost:${PORT}`);
-  console.log(`🌍 Health endpoint: http://localhost:${PORT}/health`);
+const HOST = '0.0.0.0'; // Bind to all network interfaces for external access
+httpServer.listen(PORT, HOST, () => {
+  console.log(`🎮 Multiplayer game server running on ${HOST}:${PORT}`);
+  console.log(`🌐 WebSocket endpoint: ws://144.76.56.237:${PORT}`);
+  console.log(`🌍 Health endpoint: http://144.76.56.237:${PORT}/health`);
   console.log(`🔗 Ready for multiplayer connections!`);
 });
 

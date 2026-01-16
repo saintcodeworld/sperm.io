@@ -121,14 +121,7 @@ const App: React.FC = () => {
       
       const id = `player_${Math.random().toString(36).substr(2, 9)}`;
       
-      // Join the room (this will trigger the transaction)
-      const joined = await roomManager.joinRoom(roomId, id, currentUser.username);
-      if (!joined) {
-        setError('Failed to join room');
-        setIsTransactionLoading(false);
-        return;
-      }
-
+      // Get the server first (this determines if we're in multiplayer or single-player mode)
       const roomServer = roomManager.getServer(roomId);
       if (!roomServer) {
         setError('Room server not found');
@@ -136,15 +129,37 @@ const App: React.FC = () => {
         return;
       }
 
-      // Join the player to the server with the entry fee (handles blockchain transaction)
-      const joinSuccess = await roomServer.join(id, currentUser.username, entryFee);
-      if (!joinSuccess) {
-        setError('Failed to join game - transaction may have failed');
+      // Check multiplayer connection status and log it
+      const isMultiplayer = roomManager.isConnected();
+      console.log(`[App] Game mode: ${isMultiplayer ? 'MULTIPLAYER' : 'SINGLE-PLAYER (WebSocket not connected)'}`);
+      
+      if (!isMultiplayer) {
+        console.warn('[App] ⚠️ Running in single-player mode - other players will NOT be visible!');
+        console.warn('[App] Check VITE_GAME_SERVER_URL and ensure the game server is running.');
+      }
+
+      // Join the room via WebSocket (for multiplayer) or locally (for single-player)
+      const joined = await roomManager.joinRoom(roomId, id, currentUser.username);
+      if (!joined) {
+        setError('Failed to join room');
         setIsTransactionLoading(false);
         return;
       }
-      
-      console.log(`[App] Player ${id} joined server successfully with ${entryFee} SOL entry fee`);
+
+      // For single-player mode, we need to join the local ServerSim
+      // For multiplayer mode, roomManager.joinRoom already handled the server-side join
+      if (!isMultiplayer) {
+        // Join the local ServerSim with entry fee (handles blockchain transaction for single-player)
+        const joinSuccess = await roomServer.join(id, currentUser.username, entryFee);
+        if (!joinSuccess) {
+          setError('Failed to join game - transaction may have failed');
+          setIsTransactionLoading(false);
+          return;
+        }
+        console.log(`[App] Player ${id} joined LOCAL server with ${entryFee} SOL entry fee`);
+      } else {
+        console.log(`[App] Player ${id} joined MULTIPLAYER server with ${entryFee} SOL entry fee`);
+      }
 
       // Wait a moment for the transaction to process, then start the game
       setTimeout(() => {
