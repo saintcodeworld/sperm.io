@@ -88,9 +88,6 @@ class MultiplayerGameServer {
   
   // Broadcast all player positions to main-game room at 20 FPS to reduce network load
   startGlobalBroadcaster() {
-    // Track last sent state hash to avoid sending duplicate updates
-    let lastStateHash = '';
-    
     setInterval(() => {
       const allPlayers = [];
       
@@ -99,21 +96,13 @@ class MultiplayerGameServer {
         allPlayers.push(playerData);
       });
       
-      // Only send if we have players AND the state has changed (based on simplified hash)
+      // ONLY emit if we have players - NEVER send empty arrays
       if (allPlayers.length > 0) {
-        // Create a simple hash of player positions
-        const stateHash = allPlayers.map(p => `${p.id}:${Math.round(p.x)}:${Math.round(p.y)}`).join('|');
-        
-        // Only emit if state changed to reduce bandwidth usage
-        if (stateHash !== lastStateHash) {
-          lastStateHash = stateHash;
-          
-          // Broadcast to all connected clients in main-game room
-          this.io.to('main-game').emit('global-game-state', {
-            players: allPlayers,
-            timestamp: Date.now()
-          });
-        }
+        // Broadcast to all connected clients in main-game room
+        this.io.to('main-game').emit('global-game-state', {
+          players: allPlayers,
+          timestamp: Date.now()
+        });
       }
     }, 50); // 20 FPS (50ms interval)
   }
@@ -190,8 +179,7 @@ class MultiplayerGameServer {
             timestamp: Date.now()
           });
           
-          console.log(`[BROADCAST] Sent player-joined to main-game for ${playerId} at (${spawnX.toFixed(1)}, ${spawnY.toFixed(1)})`);
-          
+              
           // Send current players to the new player
           const currentState = room.server.state;
           const currentPlayers = Object.keys(currentState.players || {}).map(id => ({
@@ -354,29 +342,14 @@ class MultiplayerGameServer {
             
             // Only send updates if we have players
             if (playerCount > 0) {
-              // Simple state comparison - serialize just player positions to detect changes
-              const stateSnapshot = JSON.stringify(
-                Object.entries(state.players).map(([id, p]) => 
-                  ({ id, x: Math.round(p.pos.x), y: Math.round(p.pos.y) })
-                )
-              );
+                      // Broadcast to all clients in the room
+              this.io.to(roomId).emit('game-state', state);
               
-              // Only send if state changed
-              if (stateSnapshot !== room.lastStateSnapshot) {
-                room.lastStateSnapshot = stateSnapshot;
-                
-                // Broadcast to all clients in the room
-                this.io.to(roomId).emit('game-state', state);
-                
-                // Detailed debugging log every 5 seconds (to avoid spam)
-                const now = Date.now();
-                if (!room.lastDebugLog || now - room.lastDebugLog > 5000) {
-                  console.log(`🎮 Room ${roomId}: ${socketCount} sockets, ${playerCount} players, ${room.players.size} tracked players`);
-                  if (playerCount > 0) {
-                    console.log(`   Player IDs: ${Object.keys(state.players).join(', ')}`);
-                  }
-                  room.lastDebugLog = now;
-                }
+              // Minimal logging only every 30 seconds
+              const now = Date.now();
+              if (!room.lastDebugLog || now - room.lastDebugLog > 30000) {
+                console.log(`Room ${roomId}: ${playerCount} players`);
+                room.lastDebugLog = now;
               }
             }
           }
@@ -433,16 +406,11 @@ io.on('connection', (socket) => {
       
       // Only send if there are actually players to send (avoid empty updates)
       if (playerData.length > 0) {
-        console.log(`📊 [EXISTING-PLAYERS] Sending ${playerData.length} players to new connection ${socket.id}`);
-        console.log(`   Players: ${playerData.map(p => `${p.name}(${p.x.toFixed(0)},${p.y.toFixed(0)})`).join(', ')}`);
-        
         // Send the list of existing players to the new connection
         socket.emit('existing-players', {
           players: playerData,
           timestamp: Date.now()
         });
-      } else {
-        console.log(`📊 [EXISTING-PLAYERS] No players to send to new connection ${socket.id}`);
       }
     } catch(error) {
       console.error('Error getting main room players:', error);

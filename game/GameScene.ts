@@ -14,7 +14,7 @@ export default class GameScene extends Phaser.Scene {
   public declare tweens: Phaser.Tweens.TweenManager;
   public declare time: Phaser.Time.Clock;
 
-  private players: Map<string, Sperm> = new Map(); // All players (local and network)
+  private players: Map<string, Sperm> = new Map(); // Local players only
   private foods: Map<string, Phaser.GameObjects.Arc> = new Map();
   private myId: string = '';
   private server: ServerSim | null = null;
@@ -25,6 +25,9 @@ export default class GameScene extends Phaser.Scene {
   private keySpace!: Phaser.Input.Keyboard.Key;
   private keyShift!: Phaser.Input.Keyboard.Key;
   private lastSolValue: number = 0;
+  
+  // Network player management
+  private networkSprites!: Phaser.GameObjects.Group; // Group for network player sprites
   private otherPlayers: Map<string, Sperm> = new Map(); // Network players from other rooms
   private networkUpdateTime: Map<string, number> = new Map(); // Last update time for each player
   private targetPositions: Map<string, {x: number, y: number, angle: number}> = new Map(); // Target positions for interpolation
@@ -48,6 +51,9 @@ export default class GameScene extends Phaser.Scene {
     this.boundaryLine = this.add.graphics();
     this.boundaryLine.lineStyle(12, 0xff0000, 0.8).strokeRect(0, 0, ARENA_SIZE, ARENA_SIZE);
     this.boundaryLine.setDepth(1);
+    
+    // Create network sprites group
+    this.networkSprites = this.add.group();
 
     // Setup local game state listeners
     if (this.server) {
@@ -107,12 +113,8 @@ export default class GameScene extends Phaser.Scene {
   
   // Set up all network synchronization listeners
   private setupNetworkListeners() {
-    console.log('[NETWORK] Setting up network player sync listeners for player:', this.myId);
-    
-    // DEBUG LOG: Listen for existing players when joining the game
-    const existingPlayersCleanup = wsClient.onExistingPlayers((data) => {
-      console.log('[NETWORK] Received existing players:', data.players?.length || 0);
-      
+    // Listen for existing players when joining the game
+    const existingPlayersCleanup = wsClient.onExistingPlayers((data) => {      
       // Create a Set of known player IDs to prevent duplicates
       const processedIds = new Set<string>();
       
@@ -120,7 +122,6 @@ export default class GameScene extends Phaser.Scene {
         data.players.forEach((player: any) => {
           if (player.id !== this.myId && !processedIds.has(player.id)) {
             processedIds.add(player.id);
-            console.log(`[NETWORK] Creating sprite for existing player: ${player.id} at (${player.x}, ${player.y})`);
             this.createOrUpdateNetworkPlayer(player);
           }
         });
@@ -128,10 +129,9 @@ export default class GameScene extends Phaser.Scene {
     });
     this.signalCleanups.push(existingPlayersCleanup);
     
-    // DEBUG LOG: Listen for player-joined events (new players joining after us)
+    // Listen for player-joined events (new players joining after us)
     const playerJoinedCleanup = wsClient.onPlayerJoined((data) => {
       if (data.playerId !== this.myId) {
-        console.log(`[NETWORK] New player joined: ${data.playerId} at (${data.x}, ${data.y})`);
         // First check if we already have this player to prevent duplicates
         if (!this.otherPlayers.has(data.playerId)) {
           this.createOrUpdateNetworkPlayer({
@@ -143,7 +143,6 @@ export default class GameScene extends Phaser.Scene {
             timestamp: data.timestamp
           });
         } else {
-          console.log(`[NETWORK] Player ${data.playerId} already exists, updating position only`);
           this.targetPositions.set(data.playerId, {
             x: data.x, 
             y: data.y, 
@@ -154,14 +153,11 @@ export default class GameScene extends Phaser.Scene {
     });
     this.signalCleanups.push(playerJoinedCleanup);
     
-    // DEBUG LOG: Listen for current-players in room (sent after join-room)
-    const currentPlayersCleanup = wsClient.onCurrentPlayers((data) => {
-      console.log('[NETWORK] Received current players in room:', data.players?.length || 0);
-      
+    // Listen for current-players in room (sent after join-room)
+    const currentPlayersCleanup = wsClient.onCurrentPlayers((data) => {      
       if (data.players && Array.isArray(data.players)) {
         data.players.forEach((player: any) => {
           if (player.id !== this.myId) {
-            console.log(`[NETWORK] Creating sprite for room player: ${player.id}`);
             this.createOrUpdateNetworkPlayer(player);
           }
         });
@@ -169,7 +165,7 @@ export default class GameScene extends Phaser.Scene {
     });
     this.signalCleanups.push(currentPlayersCleanup);
     
-    // DEBUG LOG: Listen for global-game-state (authoritative state from server at 20 FPS)
+    // Listen for global-game-state (authoritative state from server at 20 FPS)
     const globalGameStateCleanup = wsClient.onGlobalGameState((data) => {
       // Only process if we actually have player data
       if (data.players && Array.isArray(data.players) && data.players.length > 0) {
@@ -186,13 +182,9 @@ export default class GameScene extends Phaser.Scene {
     });
     this.signalCleanups.push(globalGameStateCleanup);
     
-    // DEBUG LOG: Listen for player movement events
+    // Listen for player movement events
     const playerMovedCleanup = wsClient.onPlayerMoved((data) => {
       if (data.playerId !== this.myId) {
-        // Log occasionally for debugging
-        if (Math.random() < 0.01) {
-          console.log(`[NETWORK] Player moved: ${data.playerId} to (${data.x?.toFixed(1)}, ${data.y?.toFixed(1)})`);
-        }
         this.handlePlayerMoved(data);
       }
     });
@@ -249,7 +241,7 @@ export default class GameScene extends Phaser.Scene {
     
     // If this player isn't in our network players map, create new sprite
     if (!sperm) {
-      console.log(`[NETWORK] Creating new network player: ${playerData.id} at (${playerData.x || 0}, ${playerData.y || 0})`);
+      // Create new network player
       
       // Generate a consistent color based on the player ID
       const colorSeed = parseInt(playerData.id.replace(/\D/g, '').slice(0, 6) || '0', 10);
@@ -274,8 +266,15 @@ export default class GameScene extends Phaser.Scene {
         solAddress: ''
       };
       
-      // Create new player sprite
+      // Create new player sprite with physics disabled
       sperm = new Sperm(this, initialData);
+      
+      // Add to network sprites group - for organization only, no physics needed
+      this.networkSprites.add(sperm.getHead());
+      
+      // Note: We rely purely on manual position updates via lerp
+      // Network players are just visual representations without physics
+      
       this.otherPlayers.set(playerData.id, sperm);
     }
     
@@ -315,8 +314,7 @@ export default class GameScene extends Phaser.Scene {
       return;
     }
     
-    // Debug log
-    console.log(`Processing move for player ${data.playerId} at x:${data.x || 'unknown'}, y:${data.y || 'unknown'}`);
+    // Skip debug log - avoid console flooding
     
     this.createOrUpdateNetworkPlayer({
       id: data.playerId,
@@ -347,11 +345,8 @@ export default class GameScene extends Phaser.Scene {
   // Handle player disconnected
   private handlePlayerDisconnected(data: any) {
     const playerId = data.playerId;
-    console.log(`Player disconnected: ${playerId}`);
-    
     // Remove player from our tracking
     if (this.otherPlayers.has(playerId)) {
-      console.log(`Removing network player: ${playerId}`);
       this.otherPlayers.get(playerId)?.destroy();
       this.otherPlayers.delete(playerId);
       this.networkUpdateTime.delete(playerId);
@@ -414,16 +409,16 @@ export default class GameScene extends Phaser.Scene {
         if (target) {
           const head = sperm.getHead();
           
-          // Smoothly interpolate position with lerp
-          const newX = Phaser.Math.Linear(head.x, target.x, 0.2);
-          const newY = Phaser.Math.Linear(head.y, target.y, 0.2);
+          // Smoothly interpolate position with slower lerp factor (0.1) for smoother movement
+          const newX = Phaser.Math.Linear(head.x, target.x, 0.1);
+          const newY = Phaser.Math.Linear(head.y, target.y, 0.1);
           
           // Calculate shortest angle for rotation interpolation
           let angleDiff = Phaser.Math.Angle.ShortestBetween(
             Phaser.Math.RadToDeg(head.rotation),
             Phaser.Math.RadToDeg(target.angle)
           );
-          const newAngle = head.rotation + Phaser.Math.DegToRad(angleDiff * 0.2);
+          const newAngle = head.rotation + Phaser.Math.DegToRad(angleDiff * 0.1);
           
           // Update the sprite with interpolated values
           const updateData = {
