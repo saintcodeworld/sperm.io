@@ -2,6 +2,9 @@
 builder = "nixpacks"
 buildCommand = "npm install"
 
+[nixpacks]
+install-cmd = "npm install"
+
 [deploy]
 startCommand = "npm run game-server"
 healthcheckPath = "/health"
