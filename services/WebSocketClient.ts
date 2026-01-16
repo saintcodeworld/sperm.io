@@ -16,14 +16,26 @@ export class WebSocketClient {
     }
 
     this.connectionPromise = new Promise((resolve, reject) => {
+      // Debug: Log connection attempt with protocol detection
+      const isSecure = serverUrl.startsWith('https://') || serverUrl.startsWith('wss://');
       console.log(`🔌 Connecting to game server at ${serverUrl}...`);
+      console.log(`🔒 Using ${isSecure ? 'secure (WSS)' : 'insecure (WS)'} connection`);
       
       this.socket = io(serverUrl, {
+        // Try websocket first, fall back to polling
         transports: ['websocket', 'polling'],
-        timeout: 10000,
+        // Secure connection for HTTPS/WSS URLs
+        secure: isSecure,
+        // Reconnection settings
+        timeout: 15000,
         reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000
+        reconnectionAttempts: 10,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        // Force new connection on each connect call
+        forceNew: false,
+        // Path for socket.io (default)
+        path: '/socket.io/'
       });
       
       this.socket.on('connect', () => {
@@ -165,7 +177,8 @@ export class WebSocketClient {
     return {
       connected: this.connected,
       socketId: this.socket?.id || null,
-      serverUrl: this.socket?.io?.uri || null
+      // Note: io.uri is private, use io.opts.hostname instead
+      serverUrl: this.socket?.io?.opts?.hostname || null
     };
   }
 }

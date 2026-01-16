@@ -10,7 +10,12 @@ import { ROOM_CONFIGS } from './types.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Load environment variables - Railway sets PORT automatically
 dotenv.config({ path: join(__dirname, '..', '.env.local') });
+
+// Debug: Log environment for Railway deployment
+console.log('[GameServer] Environment:', process.env.NODE_ENV || 'development');
+console.log('[GameServer] PORT from env:', process.env.PORT);
 
 // Create Express app
 const app = express();
@@ -28,12 +33,28 @@ app.get('/', (req, res) => {
 // Create HTTP server using Express
 const httpServer = createServer(app);
 
-// Set up Socket.io
+// CORS origins configuration - allow frontend domains
+// For production, specify your frontend domain(s)
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : ['*']; // Default to all for testing
+
+console.log('[GameServer] CORS allowed origins:', ALLOWED_ORIGINS);
+
+// Set up Socket.io with Railway-compatible configuration
 const io = new Server(httpServer, {
   cors: {
-    origin: "*", // In production, set to your domain
-    methods: ["GET", "POST"]
-  }
+    origin: ALLOWED_ORIGINS.includes('*') ? '*' : ALLOWED_ORIGINS,
+    methods: ['GET', 'POST'],
+    credentials: true
+  },
+  // Railway uses HTTPS, so we need to support WSS
+  transports: ['websocket', 'polling'],
+  // Allow upgrades from polling to websocket
+  allowUpgrades: true,
+  // Ping timeout for connection health
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 // Game state management
@@ -206,12 +227,24 @@ io.on('connection', (socket) => {
   gameServer.handleConnection(socket);
 });
 
+// Railway provides PORT via environment variable
+// Default to 3002 for local development
 const PORT = process.env.PORT || 3002;
-const HOST = '0.0.0.0'; // Bind to all network interfaces for external access
+const HOST = '0.0.0.0'; // Bind to all network interfaces for Railway
+
 httpServer.listen(PORT, HOST, () => {
   console.log(`🎮 Multiplayer game server running on ${HOST}:${PORT}`);
-  console.log(`🌐 WebSocket endpoint: ws://144.76.56.237:${PORT}`);
-  console.log(`🌍 Health endpoint: http://144.76.56.237:${PORT}/health`);
+  
+  // Railway deployment detection
+  if (process.env.RAILWAY_ENVIRONMENT) {
+    console.log(`🚂 Railway environment: ${process.env.RAILWAY_ENVIRONMENT}`);
+    console.log(`🌐 Railway URL: https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'your-app.up.railway.app'}`);
+    console.log(`🔒 WebSocket endpoint: wss://${process.env.RAILWAY_PUBLIC_DOMAIN || 'your-app.up.railway.app'}`);
+  } else {
+    console.log(`🌐 Local WebSocket endpoint: ws://localhost:${PORT}`);
+  }
+  
+  console.log(`🌍 Health endpoint: /health`);
   console.log(`🔗 Ready for multiplayer connections!`);
 });
 
