@@ -65,11 +65,16 @@ const App: React.FC = () => {
     const connectToGameServer = async () => {
       try {
         console.log('[App] Connecting to multiplayer game server...');
-        await roomManager.connectToGameServer();
-        console.log('[App] Game server connection established');
+        // We now properly await this and it returns a boolean indicating success
+        const connected = await roomManager.connectToGameServer();
+        if (connected) {
+          console.log('[App] Game server connection established successfully');
+        } else {
+          console.log('[App] Game server connection failed, will use single player mode');
+        }
       } catch (error) {
         console.error('[App] Failed to connect to game server:', error);
-        // Don't block the app, just log the error
+        // Still don't block the app, just log the error
       }
     };
 
@@ -121,6 +126,12 @@ const App: React.FC = () => {
       
       const id = `player_${Math.random().toString(36).substr(2, 9)}`;
       
+      // Attempt one more WebSocket connection if not already connected
+      if (!roomManager.isConnected()) {
+        console.log('[App] Attempting to reconnect to multiplayer server before starting game...');
+        await roomManager.connectToGameServer();
+      }
+      
       // Get the server first (this determines if we're in multiplayer or single-player mode)
       const roomServer = roomManager.getServer(roomId);
       if (!roomServer) {
@@ -135,7 +146,10 @@ const App: React.FC = () => {
       
       if (!isMultiplayer) {
         console.warn('[App] ⚠️ Running in single-player mode - other players will NOT be visible!');
-        console.warn('[App] Check VITE_GAME_SERVER_URL and ensure the game server is running.');
+        // Don't suggest checking env vars since we now use fallback URL
+        console.warn('[App] Could not connect to multiplayer server, using local game simulation.');
+      } else {
+        console.log('[App] 🎮 Running in MULTIPLAYER mode - you will see other players!');
       }
 
       // Join the room via WebSocket (for multiplayer) or locally (for single-player)

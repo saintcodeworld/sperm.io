@@ -8,8 +8,8 @@ class RoomManager {
   private connected: boolean = false;
 
   constructor() {
-    // In production, use your VPS domain
-    this.gameServerUrl = import.meta.env.VITE_GAME_SERVER_URL;
+    // Always use fallback URL if environment variable is missing
+    this.gameServerUrl = import.meta.env.VITE_GAME_SERVER_URL || 'https://compassionate-illumination-production-6200.up.railway.app';
     this.initializeRooms();
   }
 
@@ -26,21 +26,20 @@ class RoomManager {
     });
   }
 
-  async connectToGameServer(): Promise<void> {
-    if (!this.gameServerUrl) {
-      console.log('🎮 No game server URL configured - running in single-player mode');
-      this.connected = false;
-      return;
-    }
+  async connectToGameServer(): Promise<boolean> {
+    console.log('[App] Attempting to connect to Multiplayer before starting game...');
     
     try {
+      // Always attempt to connect - we've ensured gameServerUrl has fallback value
       await wsClient.connect(this.gameServerUrl);
       this.connected = true;
-      console.log('🎮 Connected to multiplayer game server');
+      console.log('🎮 Successfully connected to multiplayer game server');
+      return true;
     } catch (error) {
       console.error('❌ Failed to connect to game server:', error);
       this.connected = false;
-      throw error;
+      console.log('🎮 Connection failed - will run in single-player mode');
+      return false;
     }
   }
 
@@ -53,8 +52,18 @@ class RoomManager {
 
     // If not connected to multiplayer server, fall back to single-player mode
     if (!this.connected) {
-      console.log('🎮 Multiplayer server not available - starting in single-player mode');
-      return true; // Allow single-player mode
+      // Try to reconnect one more time in case the initial connection failed
+      try {
+        await this.connectToGameServer();
+      } catch (error) {
+        // Silently ignore - we'll fall back to single player
+      }
+      
+      // If still not connected, use single player mode
+      if (!this.connected) {
+        console.log('🎮 Multiplayer server not available - starting in single-player mode');
+        return true; // Allow single-player mode
+      }
     }
 
     try {
