@@ -32,6 +32,7 @@ export default class GameScene extends Phaser.Scene {
   private networkUpdateTime: Map<string, number> = new Map(); // Last update time for each player
   private targetPositions: Map<string, {x: number, y: number, angle: number}> = new Map(); // Target positions for interpolation
   private lastPositionSentTime: number = 0; // For throttling position updates
+  private fpsText!: Phaser.GameObjects.Text; // FPS counter display
   
   constructor() {
     super('GameScene');
@@ -54,6 +55,14 @@ export default class GameScene extends Phaser.Scene {
     
     // Create network sprites group
     this.networkSprites = this.add.group();
+    
+    // Add FPS counter for performance monitoring
+    this.fpsText = this.add.text(10, 10, 'FPS: 0', { 
+      fontSize: '16px', 
+      color: '#ffffff',
+      strokeThickness: 1,
+      stroke: '#000000'
+    }).setScrollFactor(0).setDepth(1000);
 
     // Setup local game state listeners
     if (this.server) {
@@ -403,22 +412,36 @@ export default class GameScene extends Phaser.Scene {
         );
       }
       
+      // Update FPS counter
+      this.fpsText.setText(`FPS: ${Math.round(this.game.loop.actualFps)}`);
+      
       // Apply interpolation to all network players
       this.otherPlayers.forEach((sperm, id) => {
         const target = this.targetPositions.get(id);
         if (target) {
           const head = sperm.getHead();
           
-          // Smoothly interpolate position with slower lerp factor (0.1) for smoother movement
-          const newX = Phaser.Math.Linear(head.x, target.x, 0.1);
-          const newY = Phaser.Math.Linear(head.y, target.y, 0.1);
+          // Calculate distance to determine interpolation factor
+          // Farther distances need faster interpolation to catch up
+          const distance = Phaser.Math.Distance.Between(head.x, head.y, target.x, target.y);
+          
+          // Variable interpolation factor based on distance
+          // Range from 0.15 (small distance) to 0.3 (large distance)
+          const baseFactor = 0.15;
+          const distanceThreshold = 100; // pixels
+          const speedupFactor = Math.min(0.3, baseFactor + (distance / distanceThreshold) * 0.15);
+          
+          // Smoothly interpolate position with variable factor
+          const newX = Phaser.Math.Linear(head.x, target.x, speedupFactor);
+          const newY = Phaser.Math.Linear(head.y, target.y, speedupFactor);
           
           // Calculate shortest angle for rotation interpolation
           let angleDiff = Phaser.Math.Angle.ShortestBetween(
             Phaser.Math.RadToDeg(head.rotation),
             Phaser.Math.RadToDeg(target.angle)
           );
-          const newAngle = head.rotation + Phaser.Math.DegToRad(angleDiff * 0.1);
+          // Use same variable factor for rotation
+          const newAngle = head.rotation + Phaser.Math.DegToRad(angleDiff * speedupFactor);
           
           // Update the sprite with interpolated values
           const updateData = {

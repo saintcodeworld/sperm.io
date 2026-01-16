@@ -55,29 +55,37 @@ export class Sperm {
       this.head.setStrokeStyle(2, 0xffffff, 0.5);
     }
 
-    // Draw Biological Tail
+    // Draw Biological Tail with optimized rendering
     this.tailGraphics.clear();
     
     if (data.segments.length > 0) {
       const baseWidth = 14 * scaleFactor; // Thicker tail
+      const maxSegments = 10; // Limit number of tail segments for performance
+      
+      // Calculate how many segments to skip based on total length
+      const skipFactor = data.segments.length > maxSegments ? Math.floor(data.segments.length / maxSegments) : 1;
       
       this.tailGraphics.beginPath();
       this.tailGraphics.moveTo(data.pos.x, data.pos.y);
       
-      data.segments.forEach((seg, i) => {
+      // Only render a subset of segments - using distance-based level of detail
+      for (let i = 0; i < data.segments.length; i += skipFactor) {
+        const seg = data.segments[i];
         // Tapering: Get thinner towards the end
         const progress = i / data.segments.length;
         const thickness = Math.max(2, baseWidth * (1 - progress * 0.8));
         const alpha = 0.8 * (1 - progress * 0.6);
         
-        this.tailGraphics.lineStyle(thickness, this.color, alpha);
-        this.tailGraphics.lineTo(seg.x, seg.y);
+        // For better performance, make fewer style changes
+        if (i % (skipFactor * 2) === 0 || i === 0) {
+          this.tailGraphics.lineStyle(thickness, this.color, alpha);
+        }
         
-        // Stroke segment by segment to apply varying thickness/alpha
-        this.tailGraphics.strokePath();
-        this.tailGraphics.beginPath();
-        this.tailGraphics.moveTo(seg.x, seg.y);
-      });
+        this.tailGraphics.lineTo(seg.x, seg.y);
+      }
+      
+      // More efficient: stroke only once at the end
+      this.tailGraphics.strokePath();
     }
   }
 
