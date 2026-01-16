@@ -48,13 +48,28 @@ const io = new Server(httpServer, {
     methods: ['GET', 'POST'],
     credentials: true
   },
-  // Railway uses HTTPS, so we need to support WSS
+  // Prefer WebSocket transport with polling as fallback
   transports: ['websocket', 'polling'],
   // Allow upgrades from polling to websocket
   allowUpgrades: true,
   // Ping timeout for connection health
   pingTimeout: 60000,
-  pingInterval: 25000
+  pingInterval: 25000,
+  // Additional configurations for stability
+  connectTimeout: 45000,
+  // Socket.io v4 options for more reliable connections
+  maxHttpBufferSize: 1e8, // 100MB max message size
+  path: '/socket.io/'
+});
+
+// Debug middleware to log all socket.io events
+io.use((socket, next) => {
+  console.log(`[DEBUG] Socket ${socket.id} attempting connection`);
+  const address = socket.handshake.headers['x-forwarded-for'] || 
+    socket.handshake.address;
+  console.log(`[DEBUG] Connection from address: ${address}`);
+  console.log(`[DEBUG] Transport: ${socket.conn.transport.name}`);
+  next();
 });
 
 // Game state management
@@ -116,6 +131,23 @@ class MultiplayerGameServer {
             timestamp: Date.now()
           });
           
+          // Send current players to the new player
+          const currentState = room.server.state;
+          const currentPlayers = Object.keys(currentState.players || {}).map(id => ({
+            id,
+            name: currentState.players[id].name,
+            x: currentState.players[id].x,
+            y: currentState.players[id].y,
+            angle: currentState.players[id].angle
+          }));
+          
+          socket.emit('current-players', {
+            players: currentPlayers,
+            timestamp: Date.now()
+          });
+          
+          console.log(`[JOIN] Sent ${currentPlayers.length} current players to new player ${playerId}`);
+          
           // Start sending game state updates
           this.startGameStateUpdates(socket, room);
           
@@ -137,7 +169,41 @@ class MultiplayerGameServer {
       if (!room) return;
       
       const { playerId, angle, boost, cashout } = data;
+      
+      // Process input in game server
       room.server.input(playerId, angle, boost, cashout);
+      
+      // Immediately broadcast this player's movement to other players for smoother experience
+      socket.to(roomId).emit('player-moved', {
+        playerId,
+        angle,
+        boost,
+        cashout,
+        timestamp: Date.now()
+      });
+      
+      // Debug log for player movement (throttled to avoid console spam)
+      if (Math.random() < 0.05) { // Only log ~5% of movements
+        console.log(`[MOVE] Player ${playerId} moved in room ${roomId}: angle=${angle}, boost=${boost}`);
+      }
+    });
+    
+    // Handle player position updates (for clients that send direct position data)
+    socket.on('player-position', (data) => {
+      const roomId = this.playerRooms.get(socket.id);
+      if (!roomId) return;
+      
+      const { playerId, x, y, angle, velocity } = data;
+      
+      // Broadcast to other clients
+      socket.to(roomId).emit('player-position-update', {
+        playerId,
+        x,
+        y,
+        angle,
+        velocity,
+        timestamp: Date.now()
+      });
     });
 
     socket.on('disconnect', () => {
