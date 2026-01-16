@@ -46,8 +46,8 @@ export class WebSocketClient {
         transports: ['websocket'],
         // Secure connection for HTTPS/WSS URLs
         secure: isSecure,
-        // Reconnection settings - more aggressive for multiplayer
-        timeout: 15000,
+        // Reconnection settings - more aggressive for multiplayer with increased timeouts
+        timeout: 20000, // Increased from 15000 to 20000
         reconnection: true,
         reconnectionAttempts: 15,
         reconnectionDelay: 500,
@@ -202,12 +202,12 @@ export class WebSocketClient {
         entryFee
       });
       
-      // Timeout after 10 seconds
+      // Increased timeout to 10 seconds to avoid timeout errors during peak traffic
       setTimeout(() => {
         this.socket?.off('join-success', onJoinSuccess);
         this.socket?.off('join-error', onJoinError);
-        reject(new Error('Join room timeout'));
-      }, 10000);
+        reject(new Error('Join room timeout after 10 seconds'));
+      }, 10000); // 10 seconds
     });
   }
 

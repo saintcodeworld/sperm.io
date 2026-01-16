@@ -27,6 +27,8 @@ export default class GameScene extends Phaser.Scene {
   private lastSolValue: number = 0;
   private otherPlayers: Map<string, Sperm> = new Map(); // Network players from other rooms
   private networkUpdateTime: Map<string, number> = new Map(); // Last update time for each player
+  private targetPositions: Map<string, {x: number, y: number, angle: number}> = new Map(); // Target positions for interpolation
+  private lastPositionSentTime: number = 0; // For throttling position updates
   
   constructor() {
     super('GameScene');
@@ -111,9 +113,13 @@ export default class GameScene extends Phaser.Scene {
     const existingPlayersCleanup = wsClient.onExistingPlayers((data) => {
       console.log('[NETWORK] Received existing players:', data.players?.length || 0);
       
+      // Create a Set of known player IDs to prevent duplicates
+      const processedIds = new Set<string>();
+      
       if (data.players && Array.isArray(data.players)) {
         data.players.forEach((player: any) => {
-          if (player.id !== this.myId) {
+          if (player.id !== this.myId && !processedIds.has(player.id)) {
+            processedIds.add(player.id);
             console.log(`[NETWORK] Creating sprite for existing player: ${player.id} at (${player.x}, ${player.y})`);
             this.createOrUpdateNetworkPlayer(player);
           }
@@ -126,14 +132,24 @@ export default class GameScene extends Phaser.Scene {
     const playerJoinedCleanup = wsClient.onPlayerJoined((data) => {
       if (data.playerId !== this.myId) {
         console.log(`[NETWORK] New player joined: ${data.playerId} at (${data.x}, ${data.y})`);
-        this.createOrUpdateNetworkPlayer({
-          id: data.playerId,
-          name: data.playerName || `Player ${data.playerId.substring(0, 4)}`,
-          x: data.x,
-          y: data.y,
-          angle: data.angle || 0,
-          timestamp: data.timestamp
-        });
+        // First check if we already have this player to prevent duplicates
+        if (!this.otherPlayers.has(data.playerId)) {
+          this.createOrUpdateNetworkPlayer({
+            id: data.playerId,
+            name: data.playerName || `Player ${data.playerId.substring(0, 4)}`,
+            x: data.x,
+            y: data.y,
+            angle: data.angle || 0,
+            timestamp: data.timestamp
+          });
+        } else {
+          console.log(`[NETWORK] Player ${data.playerId} already exists, updating position only`);
+          this.targetPositions.set(data.playerId, {
+            x: data.x, 
+            y: data.y, 
+            angle: data.angle || 0
+          });
+        }
       }
     });
     this.signalCleanups.push(playerJoinedCleanup);
@@ -153,11 +169,16 @@ export default class GameScene extends Phaser.Scene {
     });
     this.signalCleanups.push(currentPlayersCleanup);
     
-    // DEBUG LOG: Listen for global-game-state (authoritative state from server at 30 FPS)
+    // DEBUG LOG: Listen for global-game-state (authoritative state from server at 20 FPS)
     const globalGameStateCleanup = wsClient.onGlobalGameState((data) => {
-      if (data.players && Array.isArray(data.players)) {
+      // Only process if we actually have player data
+      if (data.players && Array.isArray(data.players) && data.players.length > 0) {
+        // First pass: collect all player IDs in this update
+        const currentPlayers = new Set<string>();
+        
         data.players.forEach((player: any) => {
           if (player.id !== this.myId) {
+            currentPlayers.add(player.id);
             this.createOrUpdateNetworkPlayer(player);
           }
         });
@@ -215,6 +236,15 @@ export default class GameScene extends Phaser.Scene {
     
     this.networkUpdateTime.set(playerData.id, timestamp);
     
+    // Update target position for interpolation
+    if (playerData.x !== undefined && playerData.y !== undefined) {
+      this.targetPositions.set(playerData.id, {
+        x: playerData.x,
+        y: playerData.y,
+        angle: playerData.angle || 0
+      });
+    }
+    
     let sperm = this.otherPlayers.get(playerData.id);
     
     // If this player isn't in our network players map, create new sprite
@@ -271,8 +301,11 @@ export default class GameScene extends Phaser.Scene {
       solAddress: ''
     };
     
-    // Update the sprite
-    sperm.update(updateData);
+    // Only update properties like name, color, etc. directly
+    // Position updates will be handled through interpolation in the update() method
+    if (!this.targetPositions.has(playerData.id)) {
+      sperm.update(updateData); // Direct update only for initial creation
+    }
   }
   
   // Handle player moved events
@@ -322,6 +355,7 @@ export default class GameScene extends Phaser.Scene {
       this.otherPlayers.get(playerId)?.destroy();
       this.otherPlayers.delete(playerId);
       this.networkUpdateTime.delete(playerId);
+      this.targetPositions.delete(playerId);
     }
   }
 
@@ -359,14 +393,56 @@ export default class GameScene extends Phaser.Scene {
         }
       }
       
-      // Send direct position update to other players via WebSocket
-      wsClient.sendPosition(
-        this.myId,
-        head.x,
-        head.y,
-        angle,
-        this.isBoosting ? 1.5 : 1.0
-      );
+      // Throttle position updates to 50ms intervals
+      const now = Date.now();
+      if (now - this.lastPositionSentTime >= 50) { // Send at most every 50ms
+        this.lastPositionSentTime = now;
+        
+        // Send direct position update to other players via WebSocket
+        wsClient.sendPosition(
+          this.myId,
+          head.x,
+          head.y,
+          angle,
+          this.isBoosting ? 1.5 : 1.0
+        );
+      }
+      
+      // Apply interpolation to all network players
+      this.otherPlayers.forEach((sperm, id) => {
+        const target = this.targetPositions.get(id);
+        if (target) {
+          const head = sperm.getHead();
+          
+          // Smoothly interpolate position with lerp
+          const newX = Phaser.Math.Linear(head.x, target.x, 0.2);
+          const newY = Phaser.Math.Linear(head.y, target.y, 0.2);
+          
+          // Calculate shortest angle for rotation interpolation
+          let angleDiff = Phaser.Math.Angle.ShortestBetween(
+            Phaser.Math.RadToDeg(head.rotation),
+            Phaser.Math.RadToDeg(target.angle)
+          );
+          const newAngle = head.rotation + Phaser.Math.DegToRad(angleDiff * 0.2);
+          
+          // Update the sprite with interpolated values
+          const updateData = {
+            id: id,
+            name: (sperm as any).nameText?.text || 'Unknown',
+            pos: { x: newX, y: newY },
+            angle: newAngle,
+            isBoosting: false,
+            score: 0,
+            solValue: 0,
+            segments: [],
+            length: 30,
+            color: 0xFFFFFF,
+            solAddress: ''
+          };
+          
+          sperm.update(updateData);
+        }
+      });
     }
   }
 

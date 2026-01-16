@@ -86,8 +86,11 @@ class MultiplayerGameServer {
     this.startGlobalBroadcaster();
   }
   
-  // DEBUG LOG: Broadcast all player positions to main-game room at 30 FPS
+  // Broadcast all player positions to main-game room at 20 FPS to reduce network load
   startGlobalBroadcaster() {
+    // Track last sent state hash to avoid sending duplicate updates
+    let lastStateHash = '';
+    
     setInterval(() => {
       const allPlayers = [];
       
@@ -96,14 +99,23 @@ class MultiplayerGameServer {
         allPlayers.push(playerData);
       });
       
+      // Only send if we have players AND the state has changed (based on simplified hash)
       if (allPlayers.length > 0) {
-        // Broadcast to all connected clients in main-game room
-        this.io.to('main-game').emit('global-game-state', {
-          players: allPlayers,
-          timestamp: Date.now()
-        });
+        // Create a simple hash of player positions
+        const stateHash = allPlayers.map(p => `${p.id}:${Math.round(p.x)}:${Math.round(p.y)}`).join('|');
+        
+        // Only emit if state changed to reduce bandwidth usage
+        if (stateHash !== lastStateHash) {
+          lastStateHash = stateHash;
+          
+          // Broadcast to all connected clients in main-game room
+          this.io.to('main-game').emit('global-game-state', {
+            players: allPlayers,
+            timestamp: Date.now()
+          });
+        }
       }
-    }, 1000 / 30); // 30 FPS
+    }, 50); // 20 FPS (50ms interval)
   }
 
   initializeRooms() {
@@ -320,10 +332,12 @@ class MultiplayerGameServer {
   startGameStateUpdates(socket, room) {
     const roomId = this.playerRooms.get(socket.id);
     if (!roomId) return;
-    
-    // Only create one update interval per room if it doesn't exist already
+        // Only create one update interval per room if it doesn't exist already
     if (!room.updateInterval) {
       console.log(`🔄 Starting game state broadcasts for room ${roomId}`);
+      
+      // Track last state to avoid sending unchanged states
+      room.lastStateSnapshot = null;
       
       room.updateInterval = setInterval(async () => {
         try {
@@ -338,23 +352,38 @@ class MultiplayerGameServer {
             const playerCount = Object.keys(state.players).length;
             const socketCount = socketsInRoom.length;
             
-            // Broadcast to all clients in the room
-            this.io.to(roomId).emit('game-state', state);
-            
-            // Detailed debugging log every 5 seconds (to avoid spam)
-            const now = Date.now();
-            if (!room.lastDebugLog || now - room.lastDebugLog > 5000) {
-              console.log(`🎮 Room ${roomId}: ${socketCount} sockets, ${playerCount} players, ${room.players.size} tracked players`);
-              if (playerCount > 0) {
-                console.log(`   Player IDs: ${Object.keys(state.players).join(', ')}`);
+            // Only send updates if we have players
+            if (playerCount > 0) {
+              // Simple state comparison - serialize just player positions to detect changes
+              const stateSnapshot = JSON.stringify(
+                Object.entries(state.players).map(([id, p]) => 
+                  ({ id, x: Math.round(p.pos.x), y: Math.round(p.pos.y) })
+                )
+              );
+              
+              // Only send if state changed
+              if (stateSnapshot !== room.lastStateSnapshot) {
+                room.lastStateSnapshot = stateSnapshot;
+                
+                // Broadcast to all clients in the room
+                this.io.to(roomId).emit('game-state', state);
+                
+                // Detailed debugging log every 5 seconds (to avoid spam)
+                const now = Date.now();
+                if (!room.lastDebugLog || now - room.lastDebugLog > 5000) {
+                  console.log(`🎮 Room ${roomId}: ${socketCount} sockets, ${playerCount} players, ${room.players.size} tracked players`);
+                  if (playerCount > 0) {
+                    console.log(`   Player IDs: ${Object.keys(state.players).join(', ')}`);
+                  }
+                  room.lastDebugLog = now;
+                }
               }
-              room.lastDebugLog = now;
             }
           }
         } catch (error) {
           console.error(`Error broadcasting to room ${roomId}:`, error);
         }
-      }, 1000 / 30); // 30 FPS updates for network efficiency
+      }, 50); // 20 FPS updates (50ms interval) for network efficiency
     }
 
     socket.on('disconnect', async () => {
@@ -402,16 +431,19 @@ io.on('connection', (socket) => {
         });
       });
       
-      console.log(`📊 [EXISTING-PLAYERS] Sending ${playerData.length} players to new connection ${socket.id}`);
+      // Only send if there are actually players to send (avoid empty updates)
       if (playerData.length > 0) {
+        console.log(`📊 [EXISTING-PLAYERS] Sending ${playerData.length} players to new connection ${socket.id}`);
         console.log(`   Players: ${playerData.map(p => `${p.name}(${p.x.toFixed(0)},${p.y.toFixed(0)})`).join(', ')}`);
+        
+        // Send the list of existing players to the new connection
+        socket.emit('existing-players', {
+          players: playerData,
+          timestamp: Date.now()
+        });
+      } else {
+        console.log(`📊 [EXISTING-PLAYERS] No players to send to new connection ${socket.id}`);
       }
-      
-      // Send the list of existing players to the new connection
-      socket.emit('existing-players', {
-        players: playerData,
-        timestamp: Date.now()
-      });
     } catch(error) {
       console.error('Error getting main room players:', error);
     }
