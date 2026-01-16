@@ -78,8 +78,22 @@ class MultiplayerGameServer {
           this.playerRooms.set(socket.id, roomId);
           this.playerSockets.set(socket.id, playerId);
           
-          socket.join(roomId);
+          // Join the Socket.IO room
+          await socket.join(roomId);
+          
+          // Log all sockets in this room for debugging
+          const socketsInRoom = await this.io.in(roomId).fetchSockets();
+          console.log(`👥 Room ${roomId} now has ${socketsInRoom.length} sockets:`, 
+            socketsInRoom.map(s => s.id));
+          
           socket.emit('join-success', { roomId });
+          
+          // Broadcast to room that a new player has joined
+          socket.to(roomId).emit('player-joined', { 
+            playerId, 
+            playerName,
+            timestamp: Date.now()
+          });
           
           // Start sending game state updates
           this.startGameStateUpdates(socket, room);
@@ -133,24 +147,53 @@ class MultiplayerGameServer {
     if (!room.updateInterval) {
       console.log(`🔄 Starting game state broadcasts for room ${roomId}`);
       
-      room.updateInterval = setInterval(() => {
-        // Get current game state
-        const state = room.server.state;
-        
-        // Broadcast to all clients in the room
-        this.io.to(roomId).emit('game-state', state);
-        
-        // Debug log - count players in room
-        console.log(`Room ${roomId}: ${room.players.size} players connected`);
+      room.updateInterval = setInterval(async () => {
+        try {
+          // Get current game state
+          const state = room.server.state;
+          
+          // Get current active sockets in room
+          const socketsInRoom = await this.io.in(roomId).fetchSockets();
+          
+          if (socketsInRoom.length > 0) {
+            // Add debug info to track player counts
+            const playerCount = Object.keys(state.players).length;
+            const socketCount = socketsInRoom.length;
+            
+            // Broadcast to all clients in the room
+            this.io.to(roomId).emit('game-state', state);
+            
+            // Detailed debugging log every 5 seconds (to avoid spam)
+            const now = Date.now();
+            if (!room.lastDebugLog || now - room.lastDebugLog > 5000) {
+              console.log(`🎮 Room ${roomId}: ${socketCount} sockets, ${playerCount} players, ${room.players.size} tracked players`);
+              if (playerCount > 0) {
+                console.log(`   Player IDs: ${Object.keys(state.players).join(', ')}`);
+              }
+              room.lastDebugLog = now;
+            }
+          }
+        } catch (error) {
+          console.error(`Error broadcasting to room ${roomId}:`, error);
+        }
       }, 1000 / 30); // 30 FPS updates for network efficiency
     }
 
-    socket.on('disconnect', () => {
-      // Only clear the interval if this is the last player in the room
-      if (room.players.size <= 1) {
-        console.log(`🛑 Stopping game state broadcasts for room ${roomId}`);
-        clearInterval(room.updateInterval);
-        room.updateInterval = null;
+    socket.on('disconnect', async () => {
+      try {
+        // Check how many sockets are still in the room
+        const socketsInRoom = await this.io.in(roomId).fetchSockets();
+        
+        // Only clear the interval if there are no more sockets in the room
+        if (socketsInRoom.length === 0) {
+          console.log(`🛑 Stopping game state broadcasts for room ${roomId} - no more players`);
+          clearInterval(room.updateInterval);
+          room.updateInterval = null;
+        } else {
+          console.log(`👤 Player disconnected from room ${roomId}, ${socketsInRoom.length} players remaining`);
+        }
+      } catch (error) {
+        console.error(`Error handling disconnect for room ${roomId}:`, error);
       }
     });
   }
