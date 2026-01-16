@@ -1,4 +1,5 @@
-# Sperm.io Frontend Dockerfile
+# შენ IDE-ში (VS Code ან სხვა)
+echo '# Sperm.io Frontend Dockerfile
 # React + Vite Application
 
 # Build stage
@@ -55,4 +56,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 ENV PORT=3000
 
 # Start server
-CMD ["node", "server.js"]
+CMD ["node", "server.js"]' > Dockerfile
+
+git add Dockerfile
+git commit -m "Re-create Dockerfile for frontend"
+git push origin main
