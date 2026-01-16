@@ -16,8 +16,13 @@ dotenv.config({ path: join(__dirname, '..', '.env.local') });
 const app = express();
 
 // Health check endpoint for Railway
-app.get('/', (req, res) => {
+app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Game server is running' });
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.status(200).json({ status: 'ok', message: 'Sperm.io Game Server' });
 });
 
 // Create HTTP server using Express
@@ -144,10 +149,11 @@ io.on('connection', (socket) => {
   gameServer.handleConnection(socket);
 });
 
-const PORT = process.env.GAME_SERVER_PORT || 3002;
+const PORT = process.env.PORT || 3002;
 httpServer.listen(PORT, () => {
   console.log(`🎮 Multiplayer game server running on port ${PORT}`);
   console.log(`🌐 WebSocket endpoint: ws://localhost:${PORT}`);
+  console.log(`🌍 Health endpoint: http://localhost:${PORT}/health`);
   console.log(`🔗 Ready for multiplayer connections!`);
 });
 
