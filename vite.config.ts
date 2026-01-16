@@ -26,6 +26,7 @@ export default defineConfig(({ mode }) => {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.TREASURY_PUBLIC_KEY': JSON.stringify(env.TREASURY_PUBLIC_KEY),
+        'process.env.VITE_GAME_SERVER_URL': JSON.stringify(env.VITE_GAME_SERVER_URL),
         global: 'globalThis'
       },
       resolve: {

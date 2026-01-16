@@ -2,6 +2,9 @@ import { io, Socket } from 'socket.io-client';
 import { GameState } from '../types';
 import { DeathEvent, KillEvent } from './ServerSim';
 
+// Fallback URL in case environment variable fails during build
+const SOCKET_URL = import.meta.env.VITE_GAME_SERVER_URL || 'https://compassionate-illumination-production-6200.up.railway.app';
+
 export class WebSocketClient {
   private socket: Socket | null = null;
   private gameStateCallbacks: ((state: GameState) => void)[] = [];
@@ -10,7 +13,7 @@ export class WebSocketClient {
   private connected = false;
   private connectionPromise: Promise<void> | null = null;
 
-  connect(serverUrl: string): Promise<void> {
+  connect(serverUrl: string = SOCKET_URL): Promise<void> {
     if (this.connectionPromise) {
       return this.connectionPromise;
     }
@@ -20,6 +23,14 @@ export class WebSocketClient {
       const isSecure = serverUrl.startsWith('https://') || serverUrl.startsWith('wss://');
       console.log(`🔌 Connecting to game server at ${serverUrl}...`);
       console.log(`🔒 Using ${isSecure ? 'secure (WSS)' : 'insecure (WS)'} connection`);
+      
+      // Additional debug log to show exact URL being used
+      console.log("DEBUG: Attempting socket connection to:", serverUrl);
+      
+      // Log whether we're using the fallback URL
+      if (serverUrl === SOCKET_URL && !import.meta.env.VITE_GAME_SERVER_URL) {
+        console.log("DEBUG: Using fallback URL since VITE_GAME_SERVER_URL is not available");
+      }
       
       this.socket = io(serverUrl, {
         // Try websocket first, fall back to polling
@@ -40,6 +51,7 @@ export class WebSocketClient {
       
       this.socket.on('connect', () => {
         console.log('🔌 Connected to game server successfully');
+        console.log('DEBUG: Connected to Game Server! ID:', this.socket?.id);
         this.connected = true;
         resolve();
       });
@@ -51,8 +63,27 @@ export class WebSocketClient {
       
       this.socket.on('connect_error', (error) => {
         console.error('🔌 Connection error:', error);
+        console.error('DEBUG: Connection Error:', error.message);
         this.connected = false;
         reject(error);
+      });
+      
+      // Additional connection state listeners for debugging
+      this.socket.on('reconnect', (attemptNumber) => {
+        console.log(`DEBUG: Reconnected to game server after ${attemptNumber} attempts`);
+        this.connected = true;
+      });
+      
+      this.socket.on('reconnect_attempt', (attemptNumber) => {
+        console.log(`DEBUG: Attempting to reconnect (attempt ${attemptNumber})...`);
+      });
+      
+      this.socket.on('reconnect_error', (error) => {
+        console.error('DEBUG: Reconnection error:', error.message);
+      });
+      
+      this.socket.on('reconnect_failed', () => {
+        console.error('DEBUG: Failed to reconnect after all attempts');
       });
       
       this.socket.on('game-state', (state: GameState) => {
@@ -177,10 +208,27 @@ export class WebSocketClient {
     return {
       connected: this.connected,
       socketId: this.socket?.id || null,
-      // Note: io.uri is private, use io.opts.hostname instead
-      serverUrl: this.socket?.io?.opts?.hostname || null
+      serverUrl: this.socket?.io?.opts?.hostname || null,
+      readyState: this.socket?.connected ? 'connected' : 'disconnected',
+      transports: this.socket?.io?.opts?.transports || null,
+      activeTransport: this.socket?.io?.engine?.transport?.name || null,
+      // Add detailed connection info for debugging
+      connectionDetails: {
+        url: SOCKET_URL,
+        usingFallback: !import.meta.env.VITE_GAME_SERVER_URL,
+        reconnection: this.socket?.io?.opts?.reconnection || null,
+        reconnectionAttempts: this.socket?.io?.opts?.reconnectionAttempts || null
+      }
     };
   }
 }
 
+// Export a singleton instance of the WebSocketClient
 export const wsClient = new WebSocketClient();
+
+// Add a global reference for debugging purposes
+// This helps identify if the socket object is available globally
+if (typeof window !== 'undefined') {
+  (window as any).wsClient = wsClient;
+  console.log('DEBUG: WebSocketClient attached to window object for debugging');
+}
