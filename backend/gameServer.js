@@ -173,18 +173,22 @@ class MultiplayerGameServer {
       // Process input in game server
       room.server.input(playerId, angle, boost, cashout);
       
-      // Immediately broadcast this player's movement to other players for smoother experience
-      socket.to(roomId).emit('player-moved', {
+      // Immediately broadcast this player's movement to ALL players in main-game room
+      // This ensures all players can see each other regardless of game room
+      socket.to('main-game').emit('player-moved', {
         playerId,
         angle,
         boost,
         cashout,
+        // Include position data for easier sync
+        x: room.server.state?.players?.[playerId]?.pos?.x || 0,
+        y: room.server.state?.players?.[playerId]?.pos?.y || 0,
         timestamp: Date.now()
       });
       
       // Debug log for player movement (throttled to avoid console spam)
       if (Math.random() < 0.05) { // Only log ~5% of movements
-        console.log(`[MOVE] Player ${playerId} moved in room ${roomId}: angle=${angle}, boost=${boost}`);
+        console.log(`[MOVE] Player ${playerId} moved: angle=${angle}, boost=${boost} (broadcast to main-game)`);
       }
     });
     
@@ -195,8 +199,8 @@ class MultiplayerGameServer {
       
       const { playerId, x, y, angle, velocity } = data;
       
-      // Broadcast to other clients
-      socket.to(roomId).emit('player-position-update', {
+      // Broadcast to ALL clients in main-game room
+      socket.to('main-game').emit('player-position-update', {
         playerId,
         x,
         y,
@@ -204,6 +208,11 @@ class MultiplayerGameServer {
         velocity,
         timestamp: Date.now()
       });
+      
+      // Log position updates occasionally for debugging
+      if (Math.random() < 0.01) { // Only log 1% of position updates
+        console.log(`[POS] Player ${playerId} at x=${x.toFixed(1)}, y=${y.toFixed(1)} (broadcast to main-game)`);
+      }
     });
 
     socket.on('disconnect', () => {
@@ -217,8 +226,14 @@ class MultiplayerGameServer {
           // Remove player from game server
           if (playerId) {
             room.server.leave(playerId);
+            
+            // Notify all clients in main-game room that a player has disconnected
+            socket.to('main-game').emit('player-disconnected', {
+              playerId,
+              timestamp: Date.now()
+            });
           }
-          console.log(`👋 Player disconnected from ${roomId}`);
+          console.log(`👋 Player disconnected from ${roomId} and main-game`);
         }
         this.playerRooms.delete(socket.id);
         this.playerSockets.delete(socket.id);
@@ -290,6 +305,57 @@ class MultiplayerGameServer {
 const gameServer = new MultiplayerGameServer();
 
 io.on('connection', (socket) => {
+  // Force every new connection to join the global 'main-game' room
+  socket.join('main-game');
+  console.log(`📌 Socket ${socket.id} joined main-game room`);
+  
+  // Get current active players in the main-game room
+  const getMainRoomPlayers = async () => {
+    try {
+      const socketsInRoom = await io.in('main-game').fetchSockets();
+      const playerData = [];
+      
+      // Collect data from all players in the main room
+      for(const roomSocket of socketsInRoom) {
+        // Skip the current socket (new player)
+        if(roomSocket.id === socket.id) continue;
+        
+        const playerId = gameServer.playerSockets.get(roomSocket.id);
+        if(playerId) {
+          // Find which room this player is in to get their data
+          const playerRoomId = gameServer.playerRooms.get(roomSocket.id);
+          if(playerRoomId) {
+            const room = gameServer.rooms.get(playerRoomId);
+            if(room && room.server && room.server.state && room.server.state.players && room.server.state.players[playerId]) {
+              const player = room.server.state.players[playerId];
+              playerData.push({
+                id: playerId,
+                name: player.name,
+                x: player.pos?.x || 0,
+                y: player.pos?.y || 0,
+                angle: player.angle || 0,
+                score: player.score || 0
+              });
+            }
+          }
+        }
+      }
+      
+      console.log(`📊 Sending ${playerData.length} existing players to new connection ${socket.id}`);
+      // Send the list of existing players to the new connection
+      socket.emit('existing-players', {
+        players: playerData,
+        timestamp: Date.now()
+      });
+    } catch(error) {
+      console.error('Error getting main room players:', error);
+    }
+  };
+  
+  // Send existing players to the new connection
+  getMainRoomPlayers();
+  
+  // Handle connection with regular game mechanics
   gameServer.handleConnection(socket);
 });
 

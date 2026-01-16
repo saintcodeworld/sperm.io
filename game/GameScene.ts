@@ -1,8 +1,9 @@
 
 import Phaser from 'phaser';
 import { ServerSim, DeathEvent, KillEvent } from '../services/ServerSim';
-import { GameState, ARENA_SIZE } from '../types';
+import { GameState, ARENA_SIZE, PlayerData } from '../types';
 import { Sperm } from './Sperm';
+import { wsClient } from '../services/WebSocketClient'; // Import WebSocket client for network players
 
 export default class GameScene extends Phaser.Scene {
   public declare add: Phaser.GameObjects.GameObjectFactory;
@@ -13,7 +14,7 @@ export default class GameScene extends Phaser.Scene {
   public declare tweens: Phaser.Tweens.TweenManager;
   public declare time: Phaser.Time.Clock;
 
-  private players: Map<string, Sperm> = new Map();
+  private players: Map<string, Sperm> = new Map(); // All players (local and network)
   private foods: Map<string, Phaser.GameObjects.Arc> = new Map();
   private myId: string = '';
   private server: ServerSim | null = null;
@@ -24,6 +25,8 @@ export default class GameScene extends Phaser.Scene {
   private keySpace!: Phaser.Input.Keyboard.Key;
   private keyShift!: Phaser.Input.Keyboard.Key;
   private lastSolValue: number = 0;
+  private otherPlayers: Map<string, Sperm> = new Map(); // Network players from other rooms
+  private networkUpdateTime: Map<string, number> = new Map(); // Last update time for each player
   
   constructor() {
     super('GameScene');
@@ -44,31 +47,36 @@ export default class GameScene extends Phaser.Scene {
     this.boundaryLine.lineStyle(12, 0xff0000, 0.8).strokeRect(0, 0, ARENA_SIZE, ARENA_SIZE);
     this.boundaryLine.setDepth(1);
 
-    if (!this.server) return;
-    this.signalCleanups.push(this.server.onUpdate((state) => this.handleStateUpdate(state)));
-    if (!this.server) return;
-    this.signalCleanups.push(this.server.onPlayerDeath((event) => { if (event.id === this.myId) this.triggerDeathSequence(event); }));
-    if (!this.server) return;
-    // Listen for cashout success events from ServerSim
-    this.signalCleanups.push(this.server.onUpdate((state: GameState) => {
-      // Check if this player has cashed out (removed from players but was in cashout state)
-      if (this.myId && !state.players[this.myId] && this.isCashingOut) {
-        // Player has successfully cashed out
-        this.events.emit('cashout-success', {
-          totalPot: this.lastSolValue || 0,
-          signature: 'processed'
-        });
-        this.isCashingOut = false;
-      }
-    }));
+    // Setup local game state listeners
+    if (this.server) {
+      this.signalCleanups.push(this.server.onUpdate((state) => this.handleStateUpdate(state)));
+      this.signalCleanups.push(this.server.onPlayerDeath((event) => { 
+        if (event.id === this.myId) this.triggerDeathSequence(event); 
+      }));
+      
+      // Listen for cashout success events from ServerSim
+      this.signalCleanups.push(this.server.onUpdate((state: GameState) => {
+        // Check if this player has cashed out (removed from players but was in cashout state)
+        if (this.myId && !state.players[this.myId] && this.isCashingOut) {
+          // Player has successfully cashed out
+          this.events.emit('cashout-success', {
+            totalPot: this.lastSolValue || 0,
+            signature: 'processed'
+          });
+          this.isCashingOut = false;
+        }
+      }));
 
-    this.signalCleanups.push(this.server.onKill((event: KillEvent) => {
-      if (event.killerId === this.myId) {
-        this.events.emit('kill-alert', event);
-        this.showFloatingText(event.pos.x, event.pos.y, `+${event.stolenAmount.toFixed(4)} SOL`);
-      }
-      // Removed the CASHOUT_AUTHORITY check to prevent duplicate cashout events
-    }));
+      this.signalCleanups.push(this.server.onKill((event: KillEvent) => {
+        if (event.killerId === this.myId) {
+          this.events.emit('kill-alert', event);
+          this.showFloatingText(event.pos.x, event.pos.y, `+${event.stolenAmount.toFixed(4)} SOL`);
+        }
+      }));
+    }
+
+    // Setup network player sync listeners
+    this.setupNetworkListeners();
 
     this.events.on('shutdown', this.cleanup, this);
     this.events.on('destroy', this.cleanup, this);
@@ -87,6 +95,181 @@ export default class GameScene extends Phaser.Scene {
   private cleanup() {
     this.signalCleanups.forEach(cleanup => cleanup());
     this.signalCleanups = [];
+    
+    // Clean up network player sprites
+    this.otherPlayers.forEach((sperm) => {
+      sperm.destroy();
+    });
+    this.otherPlayers.clear();
+  }
+  
+  // Set up all network synchronization listeners
+  private setupNetworkListeners() {
+    console.log('Setting up network player sync listeners');
+    
+    // Listen for existing players when joining the game
+    const existingPlayersCleanup = wsClient.onExistingPlayers((data) => {
+      console.log('Received existing players:', data.players?.length || 0);
+      
+      if (data.players && Array.isArray(data.players)) {
+        data.players.forEach((player: any) => {
+          if (player.id !== this.myId) {
+            this.createOrUpdateNetworkPlayer(player);
+          }
+        });
+      }
+    });
+    this.signalCleanups.push(existingPlayersCleanup);
+    
+    // Listen for player movement events
+    const playerMovedCleanup = wsClient.onPlayerMoved((data) => {
+      if (data.playerId !== this.myId) {
+        this.handlePlayerMoved(data);
+      }
+    });
+    this.signalCleanups.push(playerMovedCleanup);
+    
+    // Listen for direct position updates
+    const positionUpdateCleanup = wsClient.onPlayerPositionUpdate((data) => {
+      if (data.playerId !== this.myId) {
+        this.handlePlayerPosition(data);
+      }
+    });
+    this.signalCleanups.push(positionUpdateCleanup);
+    
+    // Listen for player disconnection
+    const playerDisconnectedCleanup = wsClient.onPlayerDisconnected((data) => {
+      this.handlePlayerDisconnected(data);
+    });
+    this.signalCleanups.push(playerDisconnectedCleanup);
+  }
+  
+  // Create or update a network player based on received data
+  private createOrUpdateNetworkPlayer(playerData: any) {
+    if (!playerData.id) {
+      console.warn('Received player data without ID:', playerData);
+      return;
+    }
+    
+    // Get the timestamp for freshness check
+    const timestamp = playerData.timestamp || Date.now();
+    const lastUpdate = this.networkUpdateTime.get(playerData.id) || 0;
+    
+    // Skip older updates
+    if (timestamp < lastUpdate) {
+      return;
+    }
+    
+    this.networkUpdateTime.set(playerData.id, timestamp);
+    
+    let sperm = this.otherPlayers.get(playerData.id);
+    
+    // If this player isn't in our network players map
+    if (!sperm) {
+      console.log(`Creating new network player: ${playerData.id}`);
+      
+      // Generate a consistent color based on the player ID
+      const colorSeed = parseInt(playerData.id.replace(/\D/g, '').slice(0, 6) || '0', 10);
+      const color = Phaser.Display.Color.GetColor(
+        100 + (colorSeed % 155),  // Ensure visible R component
+        100 + ((colorSeed >> 8) % 155), // Ensure visible G component
+        100 + ((colorSeed >> 16) % 155) // Ensure visible B component
+      );
+      
+      // Initialize with all required PlayerData properties
+      const initialData: PlayerData = {
+        id: playerData.id,
+        name: playerData.name || `Player ${playerData.id.substring(0, 4)}`,
+        pos: { x: playerData.x || 0, y: playerData.y || 0 },
+        angle: playerData.angle || 0,
+        length: 30, // Default length
+        color: color,
+        isBoosting: false,
+        score: playerData.score || 0,
+        solValue: playerData.solValue || 0,
+        segments: [], // Empty segments initially
+        solAddress: ''
+      };
+      
+      // Create new player sprite
+      sperm = new Sperm(this, initialData);
+      this.otherPlayers.set(playerData.id, sperm);
+    }
+    
+    // Get current properties for values we might need to preserve
+    const headPos = sperm.getHead();
+    
+    // Update the player with whatever data we have, ensuring all required properties
+    const updateData: PlayerData = {
+      id: playerData.id,
+      name: playerData.name || 'Unknown',
+      pos: { 
+        x: playerData.x !== undefined ? playerData.x : headPos.x,
+        y: playerData.y !== undefined ? playerData.y : headPos.y 
+      },
+      angle: playerData.angle !== undefined ? playerData.angle : 0,
+      isBoosting: playerData.boost !== undefined ? playerData.boost : false,
+      score: playerData.score || 0,
+      solValue: playerData.solValue || 0,
+      segments: [], // We'll generate segments on render if needed
+      length: 30, // Default length
+      // Generate a random color if we can't access the original
+      color: 0xFFFFFF,
+      solAddress: ''
+    };
+    
+    // Update the sprite
+    sperm.update(updateData);
+  }
+  
+  // Handle player moved events
+  private handlePlayerMoved(data: any) {
+    if (!data || !data.playerId) {
+      console.warn('Received invalid player moved data:', data);
+      return;
+    }
+    
+    // Debug log
+    console.log(`Processing move for player ${data.playerId} at x:${data.x || 'unknown'}, y:${data.y || 'unknown'}`);
+    
+    this.createOrUpdateNetworkPlayer({
+      id: data.playerId,
+      angle: data.angle,
+      boost: data.boost,
+      x: data.x,
+      y: data.y,
+      timestamp: data.timestamp
+    });
+  }
+  
+  // Handle direct position updates
+  private handlePlayerPosition(data: any) {
+    if (!data || !data.playerId) {
+      console.warn('Received invalid player position data:', data);
+      return;
+    }
+    
+    this.createOrUpdateNetworkPlayer({
+      id: data.playerId,
+      x: data.x,
+      y: data.y,
+      angle: data.angle,
+      timestamp: data.timestamp
+    });
+  }
+  
+  // Handle player disconnected
+  private handlePlayerDisconnected(data: any) {
+    const playerId = data.playerId;
+    console.log(`Player disconnected: ${playerId}`);
+    
+    // Remove player from our tracking
+    if (this.otherPlayers.has(playerId)) {
+      console.log(`Removing network player: ${playerId}`);
+      this.otherPlayers.get(playerId)?.destroy();
+      this.otherPlayers.delete(playerId);
+      this.networkUpdateTime.delete(playerId);
+    }
   }
 
   private showFloatingText(x: number, y: number, text: string) {
@@ -111,17 +294,26 @@ export default class GameScene extends Phaser.Scene {
       const angle = Phaser.Math.Angle.Between(head.x, head.y, worldPoint.x, worldPoint.y);
       
       // Authoritative Input: Tell server intent to move, boost, and cashout
-      if (!this.server) return;
-      this.server.input(this.myId, angle, this.isBoosting, this.isCashingOut);
+      if (this.server) {
+        this.server.input(this.myId, angle, this.isBoosting, this.isCashingOut);
 
-      // Get progress from the server's authoritative timer
-      if (!this.server) return;
-      const progress = this.server.getCashoutProgress(this.myId);
-      if (progress > 0) {
-        this.events.emit('cashout-progress', progress);
-      } else {
-        this.events.emit('cashout-progress', 0);
+        // Get progress from the server's authoritative timer
+        const progress = this.server.getCashoutProgress(this.myId);
+        if (progress > 0) {
+          this.events.emit('cashout-progress', progress);
+        } else {
+          this.events.emit('cashout-progress', 0);
+        }
       }
+      
+      // Send direct position update to other players via WebSocket
+      wsClient.sendPosition(
+        this.myId,
+        head.x,
+        head.y,
+        angle,
+        this.isBoosting ? 1.5 : 1.0
+      );
     }
   }
 

@@ -15,6 +15,8 @@ export class WebSocketClient {
   private playerMovedCallbacks: ((data: any) => void)[] = [];
   private currentPlayersCallbacks: ((data: any) => void)[] = [];
   private playerPositionUpdateCallbacks: ((data: any) => void)[] = [];
+  private existingPlayersCallbacks: ((data: any) => void)[] = [];
+  private playerDisconnectedCallbacks: ((data: any) => void)[] = [];
   private connected = false;
   private connectionPromise: Promise<void> | null = null;
 
@@ -103,6 +105,10 @@ export class WebSocketClient {
       // Handle direct player movement events for more responsive gameplay
       this.socket.on('player-moved', (data: any) => {
         console.log('DEBUG: Player moved event received:', data.playerId);
+        // Log position data if available for debugging
+        if (data.x !== undefined && data.y !== undefined) {
+          console.log(`DEBUG: Player ${data.playerId} at position x:${data.x.toFixed(1)}, y:${data.y.toFixed(1)}`);
+        }
         this.playerMovedCallbacks.forEach(callback => callback(data));
       });
       
@@ -110,6 +116,21 @@ export class WebSocketClient {
       this.socket.on('current-players', (data: any) => {
         console.log('DEBUG: Received current players in room:', data.players?.length || 0);
         this.currentPlayersCallbacks.forEach(callback => callback(data));
+      });
+      
+      // Handle existing players in main-game room when joining
+      this.socket.on('existing-players', (data: any) => {
+        console.log('DEBUG: Received existing players in main-game room:', data.players?.length || 0);
+        if (data.players?.length > 0) {
+          console.log('DEBUG: First player in list:', data.players[0]);
+        }
+        this.existingPlayersCallbacks.forEach(callback => callback(data));
+      });
+      
+      // Handle player disconnection events
+      this.socket.on('player-disconnected', (data: any) => {
+        console.log('DEBUG: Player disconnected event:', data.playerId);
+        this.playerDisconnectedCallbacks.forEach(callback => callback(data));
       });
       
       // Handle direct position updates from other players
@@ -215,6 +236,28 @@ export class WebSocketClient {
       const index = this.currentPlayersCallbacks.indexOf(callback);
       if (index > -1) {
         this.currentPlayersCallbacks.splice(index, 1);
+      }
+    };
+  }
+  
+  // Method to listen for existing players in main-game room
+  onExistingPlayers(callback: (data: any) => void) {
+    this.existingPlayersCallbacks.push(callback);
+    return () => {
+      const index = this.existingPlayersCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.existingPlayersCallbacks.splice(index, 1);
+      }
+    };
+  }
+  
+  // Method to listen for player disconnection events
+  onPlayerDisconnected(callback: (data: any) => void) {
+    this.playerDisconnectedCallbacks.push(callback);
+    return () => {
+      const index = this.playerDisconnectedCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.playerDisconnectedCallbacks.splice(index, 1);
       }
     };
   }
