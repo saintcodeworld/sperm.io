@@ -223,11 +223,14 @@ export class ServerSim {
   }
 
   handleDeath(player, reason, killedByName, killerId) {
+    // Immediately remove player from active players to stop position broadcasts
+    const playerId = player.id;
     const stolenAmount = player.solValue;
-    const timeAlive = this.getTimeAlive(player.id);
+    const timeAlive = this.getTimeAlive(playerId);
 
+    // Create death event before removing player
     const event = {
-      id: player.id,
+      id: playerId,
       score: player.score,
       length: player.length,
       reason,
@@ -236,6 +239,7 @@ export class ServerSim {
       timeAlive
     };
 
+    // Handle kill rewards before removal
     if (killerId && this.state.players[killerId]) {
       this.state.players[killerId].solValue += stolenAmount;
       this.killCallbacks.forEach(cb => cb({
@@ -245,6 +249,14 @@ export class ServerSim {
         pos: { x: player.pos.x, y: player.pos.y }
       }));
     }
+
+    // Immediately remove player from state
+    delete this.state.players[playerId];
+    this.cashoutStates.delete(playerId);
+    this.playerJoinTime.delete(playerId);
+    
+    // Notify all clients of death
+    this.deathCallbacks.forEach(cb => cb(event));
 
     // Convert dead player into food
     player.segments.forEach((seg, idx) => {

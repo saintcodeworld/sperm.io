@@ -20,8 +20,10 @@ export default class GameScene extends Phaser.Scene {
   private server: ServerSim | null = null;
   private isBoosting: boolean = false;
   private isCashingOut: boolean = false;
+  private isDead: boolean = false;
   private boundaryLine!: Phaser.GameObjects.Graphics;
   private signalCleanups: (() => void)[] = [];
+  private serverPosition: { x: number, y: number } = { x: 0, y: 0 };
   private keySpace!: Phaser.Input.Keyboard.Key;
   private keyShift!: Phaser.Input.Keyboard.Key;
   private lastSolValue: number = 0;
@@ -30,7 +32,10 @@ export default class GameScene extends Phaser.Scene {
   private networkSprites!: Phaser.GameObjects.Group; // Group for network player sprites
   private otherPlayers: Map<string, Sperm> = new Map(); // Network players from other rooms
   private networkUpdateTime: Map<string, number> = new Map(); // Last update time for each player
-  private targetPositions: Map<string, {x: number, y: number, angle: number}> = new Map(); // Target positions for interpolation
+  private stateBuffer: Map<string, Array<{state: any, timestamp: number}>> = new Map(); // Buffer for interpolation
+  private readonly RENDER_DELAY = 100; // ms
+  private readonly BUFFER_SIZE = 4; // Keep 4 states for interpolation
+  private readonly INTERPOLATION_STEP = 1/144; // For 144hz rendering
   private lastPositionSentTime: number = 0; // For throttling position updates
   private fpsText!: Phaser.GameObjects.Text; // FPS counter display
   
@@ -41,10 +46,20 @@ export default class GameScene extends Phaser.Scene {
   init(data: { id: string, server: ServerSim }) {
     this.server = data.server;
     this.myId = data.id;
+    this.isDead = false;
+    this.serverPosition = { x: 0, y: 0 };
   }
 
   create() {
+    // Set physics step to fixed
+    if (this.physics && this.physics.world) {
+      this.physics.world.setFPS(60);
+      this.physics.world.fixedStep = true;
+    }
+    
+    // Set camera bounds and smooth follow
     this.cameras.main.setBounds(-100, -100, ARENA_SIZE + 200, ARENA_SIZE + 200);
+    this.cameras.main.setLerp(0.1); // Smooth camera follow
     if (this.physics && this.physics.world) this.physics.world.setBounds(0, 0, ARENA_SIZE, ARENA_SIZE);
 
     this.add.grid(ARENA_SIZE/2, ARENA_SIZE/2, ARENA_SIZE, ARENA_SIZE, 100, 100, 0x050505, 1, 0x111111, 1).setDepth(-1);
@@ -151,12 +166,6 @@ export default class GameScene extends Phaser.Scene {
             angle: data.angle || 0,
             timestamp: data.timestamp
           });
-        } else {
-          this.targetPositions.set(data.playerId, {
-            x: data.x, 
-            y: data.y, 
-            angle: data.angle || 0
-          });
         }
       }
     });
@@ -217,7 +226,7 @@ export default class GameScene extends Phaser.Scene {
   // Create or update a network player based on received data
   private createOrUpdateNetworkPlayer(playerData: any) {
     if (!playerData.id) {
-      console.warn('[NETWORK] Received player data without ID:', playerData);
+      return;
       return;
     }
     
@@ -237,14 +246,7 @@ export default class GameScene extends Phaser.Scene {
     
     this.networkUpdateTime.set(playerData.id, timestamp);
     
-    // Update target position for interpolation
-    if (playerData.x !== undefined && playerData.y !== undefined) {
-      this.targetPositions.set(playerData.id, {
-        x: playerData.x,
-        y: playerData.y,
-        angle: playerData.angle || 0
-      });
-    }
+    // State updates are now handled via the state buffer
     
     let sperm = this.otherPlayers.get(playerData.id);
     
@@ -311,20 +313,53 @@ export default class GameScene extends Phaser.Scene {
     
     // Only update properties like name, color, etc. directly
     // Position updates will be handled through interpolation in the update() method
-    if (!this.targetPositions.has(playerData.id)) {
-      sperm.update(updateData); // Direct update only for initial creation
-    }
+    sperm.update(updateData); // Direct update only for initial creation
   }
   
   // Handle player moved events
   private handlePlayerMoved(data: any) {
     if (!data || !data.playerId) {
-      console.warn('Received invalid player moved data:', data);
+      return;
       return;
     }
     
-    // Skip debug log - avoid console flooding
+    // Add to state buffer instead of direct update
+    if (!this.stateBuffer.has(data.playerId)) {
+      this.stateBuffer.set(data.playerId, []);
+    }
     
+    const buffer = this.stateBuffer.get(data.playerId)!;
+    const timestamp = data.timestamp || Date.now();
+    
+    // Insert state in correct temporal order
+    const insertIndex = buffer.findIndex(state => state.timestamp > timestamp);
+    if (insertIndex === -1) {
+      buffer.push({
+        state: {
+          x: data.x,
+          y: data.y,
+          angle: data.angle,
+          boost: data.boost,
+          score: data.score,
+          solValue: data.solValue
+        },
+        timestamp
+      });
+    } else {
+      buffer.splice(insertIndex, 0, {
+        state: {
+          x: data.x,
+          y: data.y,
+          angle: data.angle,
+          boost: data.boost,
+          score: data.score,
+          solValue: data.solValue
+        },
+        timestamp
+      });
+    }
+    
+    // Ensure player exists for rendering
     this.createOrUpdateNetworkPlayer({
       id: data.playerId,
       angle: data.angle,
@@ -338,7 +373,7 @@ export default class GameScene extends Phaser.Scene {
   // Handle direct position updates
   private handlePlayerPosition(data: any) {
     if (!data || !data.playerId) {
-      console.warn('Received invalid player position data:', data);
+      return;
       return;
     }
     
@@ -369,40 +404,101 @@ export default class GameScene extends Phaser.Scene {
   }
 
   private triggerDeathSequence(event: DeathEvent) {
-    this.cameras.main.shake(300, 0.03);
-    this.cameras.main.flash(500, 255, 0, 0);
-    this.time.delayedCall(800, () => this.events.emit('game-over', event));
+    if (this.isDead) return; // Prevent multiple death triggers
+    
+    this.isDead = true;
+    
+    // Immediately pause physics and disconnect
+    if (this.physics) this.physics.pause();
+    wsClient.disconnect();
+    
+    // Visual effects - reduced shake for smoother death
+    this.cameras.main.shake(200, 0.02);
+    this.cameras.main.flash(300, 255, 0, 0);
+    
+    // Clean up ALL input listeners
+    this.input.keyboard?.off('keydown-SHIFT');
+    this.input.keyboard?.off('keyup-SHIFT');
+    this.input.keyboard?.off('keydown-SPACE');
+    this.input.keyboard?.off('keyup-SPACE');
+    this.input.off('pointerdown');
+    this.input.off('pointerup');
+    
+    // Freeze the player at current position
+    const playerSperm = this.players.get(this.myId);
+    if (playerSperm) {
+      const head = playerSperm.getHead();
+      // Since we're using position-based movement, just stop updating position
+      this.isBoosting = false;
+      this.isCashingOut = false;
+    }
+    
+    // Instant game over - no delay
+    this.events.emit('game-over', event);
   }
 
   update() {
     const playerSperm = this.players.get(this.myId);
-    if (playerSperm) {
+    if (playerSperm && !this.isDead) {
       const head = playerSperm.getHead();
-      this.cameras.main.centerOn(head.x, head.y);
-
+      
+      // Local movement prediction
       const pointer = this.input.activePointer;
       const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
       const angle = Phaser.Math.Angle.Between(head.x, head.y, worldPoint.x, worldPoint.y);
       
-      // Authoritative Input: Tell server intent to move, boost, and cashout
-      if (this.server) {
-        this.server.input(this.myId, angle, this.isBoosting, this.isCashingOut);
-
-        // Get progress from the server's authoritative timer
-        const progress = this.server.getCashoutProgress(this.myId);
-        if (progress > 0) {
-          this.events.emit('cashout-progress', progress);
-        } else {
-          this.events.emit('cashout-progress', 0);
+      // Apply movement with smooth rotation
+      const speed = this.isBoosting ? 6 : 4;
+      const dx = Math.cos(angle) * speed;
+      const dy = Math.sin(angle) * speed;
+      
+      // Update local position - client authority
+      head.x += dx;
+      head.y += dy;
+      
+      // Smooth rotation with increased interpolation
+      head.rotation = Phaser.Math.Angle.RotateTo(head.rotation, angle, 0.15);
+      
+      // Only validate against server position if deviation is extreme
+      const serverPos = this.server?.getPlayerData(this.myId)?.pos;
+      if (serverPos) {
+        const dist = Phaser.Math.Distance.Between(
+          head.x,
+          head.y,
+          serverPos.x,
+          serverPos.y
+        );
+        
+        // Only snap if deviation is huge (200px)
+        if (dist > 200) {
+          head.x = serverPos.x;
+          head.y = serverPos.y;
         }
       }
       
-      // Throttle position updates to 50ms intervals
-      const now = Date.now();
-      if (now - this.lastPositionSentTime >= 50) { // Send at most every 50ms
-        this.lastPositionSentTime = now;
+      // Clamp position to arena bounds
+      head.x = Phaser.Math.Clamp(head.x, 0, ARENA_SIZE);
+      head.y = Phaser.Math.Clamp(head.y, 0, ARENA_SIZE);
+      
+      // Send input to server in background
+      if (this.server && !this.isDead) {
+        this.server.input(this.myId, angle, this.isBoosting, this.isCashingOut);
         
-        // Send direct position update to other players via WebSocket
+        const progress = this.server.getCashoutProgress(this.myId);
+        this.events.emit('cashout-progress', progress > 0 ? progress : 0);
+        
+        // Update server position from authoritative source
+        const serverState = this.server.getPlayerData(this.myId);
+        if (serverState) {
+          this.serverPosition.x = serverState.pos.x;
+          this.serverPosition.y = serverState.pos.y;
+        }
+      }
+      
+      // Throttled position sync to other players (only if alive)
+      const currentTimestamp = Date.now();
+      if (!this.isDead && currentTimestamp - this.lastPositionSentTime >= 33) { // ~30fps network updates
+        this.lastPositionSentTime = currentTimestamp;
         wsClient.sendPosition(
           this.myId,
           head.x,
@@ -412,71 +508,73 @@ export default class GameScene extends Phaser.Scene {
         );
       }
       
-      // Update FPS counter
       this.fpsText.setText(`FPS: ${Math.round(this.game.loop.actualFps)}`);
       
-      // Apply interpolation to all network players
+      // Smooth interpolation for other players
+      const renderTime = this.time.now - this.RENDER_DELAY;
+      
       this.otherPlayers.forEach((sperm, id) => {
-        const target = this.targetPositions.get(id);
-        if (target) {
-          const head = sperm.getHead();
-          
-          // Calculate distance to determine interpolation factor
-          // Farther distances need faster interpolation to catch up
-          const distance = Phaser.Math.Distance.Between(head.x, head.y, target.x, target.y);
-          
-          // Variable interpolation factor based on distance
-          // Range from 0.15 (small distance) to 0.3 (large distance)
-          const baseFactor = 0.15;
-          const distanceThreshold = 100; // pixels
-          const speedupFactor = Math.min(0.3, baseFactor + (distance / distanceThreshold) * 0.15);
-          
-          // Smoothly interpolate position with variable factor
-          const newX = Phaser.Math.Linear(head.x, target.x, speedupFactor);
-          const newY = Phaser.Math.Linear(head.y, target.y, speedupFactor);
-          
-          // Calculate shortest angle for rotation interpolation
-          let angleDiff = Phaser.Math.Angle.ShortestBetween(
-            Phaser.Math.RadToDeg(head.rotation),
-            Phaser.Math.RadToDeg(target.angle)
-          );
-          // Use same variable factor for rotation
-          const newAngle = head.rotation + Phaser.Math.DegToRad(angleDiff * speedupFactor);
-          
-          // Update the sprite with interpolated values
-          const updateData = {
-            id: id,
-            name: (sperm as any).nameText?.text || 'Unknown',
-            pos: { x: newX, y: newY },
-            angle: newAngle,
-            isBoosting: false,
-            score: 0,
-            solValue: 0,
-            segments: [],
-            length: 30,
-            color: 0xFFFFFF,
-            solAddress: ''
-          };
-          
-          sperm.update(updateData);
-        }
+        const buffer = this.stateBuffer.get(id);
+        if (!buffer || buffer.length < 2) return;
+        
+        // Find states to interpolate between
+        const states = buffer
+          .filter(state => state.timestamp <= renderTime)
+          .slice(-3); // Use last 3 states for smoother interpolation
+        
+        if (states.length < 2) return;
+        
+        const latest = states[states.length - 1];
+        const previous = states[states.length - 2];
+        
+        // Hermite interpolation for smoother movement
+        const t = (renderTime - previous.timestamp) / (latest.timestamp - previous.timestamp);
+        const alpha = Phaser.Math.Easing.Cubic.InOut(Math.max(0, Math.min(1, t)));
+        
+        const newX = Phaser.Math.Linear(previous.state.x, latest.state.x, alpha);
+        const newY = Phaser.Math.Linear(previous.state.y, latest.state.y, alpha);
+        const newAngle = Phaser.Math.Angle.RotateTo(previous.state.angle, latest.state.angle, 0.1);
+        
+        sperm.update({
+          id,
+          name: (sperm as any).nameText?.text || 'Unknown',
+          pos: { x: newX, y: newY },
+          angle: newAngle,
+          isBoosting: latest.state.boost || false,
+          score: latest.state.score || 0,
+          solValue: latest.state.solValue || 0,
+          segments: latest.state.segments || [],
+          length: 30,
+          color: sperm.getColor(),
+          solAddress: ''
+        });
+        
+        // Cleanup old states
+        while (buffer.length > this.BUFFER_SIZE) buffer.shift();
       });
     }
   }
 
   private handleStateUpdate(state: GameState) {
     Object.entries(state.players).forEach(([id, pData]) => {
+      // Skip local player position updates from server
+      if (id === this.myId) {
+        // Only update non-position data for local player
+        const localPlayer = this.players.get(id);
+        if (localPlayer) {
+          this.lastSolValue = pData.solValue;
+          // Update score and other non-position properties
+          localPlayer.updateNonPosition(pData);
+        }
+        return;
+      }
+
       let sperm = this.players.get(id);
       if (!sperm) {
         sperm = new Sperm(this, pData);
         this.players.set(id, sperm);
       }
       sperm.update(pData);
-      
-      // Track the current player's SOL value
-      if (id === this.myId) {
-        this.lastSolValue = pData.solValue;
-      }
     });
 
     this.players.forEach((_, id) => {

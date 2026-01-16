@@ -329,6 +329,20 @@ export class WebSocketClient {
     });
   }
 
+  // Send player death event to server
+  sendDeath(playerId: string) {
+    if (!this.socket || !this.connected) {
+      console.warn('⚠️ Cannot send death event: not connected to game server');
+      return;
+    }
+    
+    console.log(`🎮 Sending death event for player ${playerId}`);
+    this.socket.emit('player-death', {
+      playerId,
+      timestamp: Date.now()
+    });
+  }
+
   onPlayerDeath(callback: (event: DeathEvent) => void) {
     this.deathCallbacks.push(callback);
     return () => {

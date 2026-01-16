@@ -1,13 +1,19 @@
 # Game Server Dockerfile
-FROM node:18-alpine
+# Sperm.io Game Server Dockerfile
+# WebSocket/Socket.io Multiplayer Server
+
+FROM node:20-alpine
+
+# Install curl for healthcheck
+RUN apk add --no-cache curl
 
 WORKDIR /app
 
-# Copy package files
+# Copy backend package files
 COPY backend/package*.json ./
 
 # Install dependencies
-RUN npm ci --only=production
+RUN npm install
 
 # Copy backend source code
 COPY backend/ .

@@ -22,3 +22,39 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment files (IMPORTANT: Never commit secrets!)
+.env
+.env.local
+.env.production.local
+.env.*.local
+
+# Keep example env files
+!.env.example
+!.env.production
+
+# Database
+*.sql.backup
+postgres_data/
+redis_data/
+
+# Docker
+docker-compose.override.yml
+
+# SSL certificates
+*.pem
+*.key
+*.crt
+ssl/
+
+# IDE
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+
+# Build artifacts
+build/
+.cache/

@@ -14,7 +14,10 @@ export const getGameConfig = (containerId: string): Phaser.Types.Core.GameConfig
     antialias: true,
     roundPixels: false,
     powerPreference: 'high-performance',
-    batchSize: 2048 // Increase batch size for better performance
+    batchSize: 4096, // Increased batch size
+    clearBeforeRender: false, // Skip clear for performance
+    desynchronized: true, // Reduce latency
+    premultipliedAlpha: false // Better performance
   },
   // Optimize physics
   physics: {
@@ -22,13 +25,15 @@ export const getGameConfig = (containerId: string): Phaser.Types.Core.GameConfig
     arcade: {
       gravity: { x: 0, y: 0 },
       debug: false,
-      fps: 60
+      fps: 144,
+      tileBias: 0 // Reduce physics overhead
     }
   },
-  // Set fps limit
+  // Uncapped FPS with vsync disabled for maximum performance
   fps: {
-    target: 60,
-    forceSetTimeOut: true
+    target: 144,
+    forceSetTimeOut: false,
+    deltaHistory: 120
   },
   scene: [GameScene],
   backgroundColor: '#050505'

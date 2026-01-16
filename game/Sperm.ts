@@ -9,6 +9,10 @@ export class Sperm {
   private nameText: Phaser.GameObjects.Text;
   private id: string;
   private color: number;
+  
+  public getColor(): number {
+    return this.color;
+  }
 
   constructor(scene: Phaser.Scene, data: PlayerData) {
     this.scene = scene;
@@ -18,6 +22,11 @@ export class Sperm {
     // Head - Realistic sperm head (Thicker and larger)
     this.head = scene.add.ellipse(data.pos.x, data.pos.y, 30, 22, this.color);
     this.head.setStrokeStyle(2, 0x000000, 1);
+    
+    // Enable physics on head for velocity control
+    if (scene.physics && scene.physics.world) {
+      scene.physics.world.enable(this.head);
+    }
     
     // Tail
     this.tailGraphics = scene.add.graphics();
@@ -97,5 +106,26 @@ export class Sperm {
 
   public getHead() {
     return this.head;
+  }
+
+  // Update non-position properties (score, solValue, etc)
+  public updateNonPosition(data: PlayerData) {
+    // Update everything except position and angle
+    if (data.solValue !== undefined) {
+      this.nameText.setText(`${data.name} (${data.solValue.toFixed(2)} SOL)`);
+    }
+    
+    // Growth logic
+    const scaleFactor = this.id.startsWith('bot_')
+      ? Math.max(1, 0.8 + data.solValue * 2)
+      : 1;
+    this.head.setScale(scaleFactor);
+
+    // Visual feedback for high-value targets
+    if (this.id.startsWith('bot_') && data.solValue > 0.1) {
+      this.head.setStrokeStyle(4, 0xffffff, 0.8);
+    } else {
+      this.head.setStrokeStyle(2, 0xffffff, 0.5);
+    }
   }
 }
