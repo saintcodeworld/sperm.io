@@ -105,12 +105,56 @@ export default class GameScene extends Phaser.Scene {
   
   // Set up all network synchronization listeners
   private setupNetworkListeners() {
-    console.log('Setting up network player sync listeners');
+    console.log('[NETWORK] Setting up network player sync listeners for player:', this.myId);
     
-    // Listen for existing players when joining the game
+    // DEBUG LOG: Listen for existing players when joining the game
     const existingPlayersCleanup = wsClient.onExistingPlayers((data) => {
-      console.log('Received existing players:', data.players?.length || 0);
+      console.log('[NETWORK] Received existing players:', data.players?.length || 0);
       
+      if (data.players && Array.isArray(data.players)) {
+        data.players.forEach((player: any) => {
+          if (player.id !== this.myId) {
+            console.log(`[NETWORK] Creating sprite for existing player: ${player.id} at (${player.x}, ${player.y})`);
+            this.createOrUpdateNetworkPlayer(player);
+          }
+        });
+      }
+    });
+    this.signalCleanups.push(existingPlayersCleanup);
+    
+    // DEBUG LOG: Listen for player-joined events (new players joining after us)
+    const playerJoinedCleanup = wsClient.onPlayerJoined((data) => {
+      if (data.playerId !== this.myId) {
+        console.log(`[NETWORK] New player joined: ${data.playerId} at (${data.x}, ${data.y})`);
+        this.createOrUpdateNetworkPlayer({
+          id: data.playerId,
+          name: data.playerName || `Player ${data.playerId.substring(0, 4)}`,
+          x: data.x,
+          y: data.y,
+          angle: data.angle || 0,
+          timestamp: data.timestamp
+        });
+      }
+    });
+    this.signalCleanups.push(playerJoinedCleanup);
+    
+    // DEBUG LOG: Listen for current-players in room (sent after join-room)
+    const currentPlayersCleanup = wsClient.onCurrentPlayers((data) => {
+      console.log('[NETWORK] Received current players in room:', data.players?.length || 0);
+      
+      if (data.players && Array.isArray(data.players)) {
+        data.players.forEach((player: any) => {
+          if (player.id !== this.myId) {
+            console.log(`[NETWORK] Creating sprite for room player: ${player.id}`);
+            this.createOrUpdateNetworkPlayer(player);
+          }
+        });
+      }
+    });
+    this.signalCleanups.push(currentPlayersCleanup);
+    
+    // DEBUG LOG: Listen for global-game-state (authoritative state from server at 30 FPS)
+    const globalGameStateCleanup = wsClient.onGlobalGameState((data) => {
       if (data.players && Array.isArray(data.players)) {
         data.players.forEach((player: any) => {
           if (player.id !== this.myId) {
@@ -119,11 +163,15 @@ export default class GameScene extends Phaser.Scene {
         });
       }
     });
-    this.signalCleanups.push(existingPlayersCleanup);
+    this.signalCleanups.push(globalGameStateCleanup);
     
-    // Listen for player movement events
+    // DEBUG LOG: Listen for player movement events
     const playerMovedCleanup = wsClient.onPlayerMoved((data) => {
       if (data.playerId !== this.myId) {
+        // Log occasionally for debugging
+        if (Math.random() < 0.01) {
+          console.log(`[NETWORK] Player moved: ${data.playerId} to (${data.x?.toFixed(1)}, ${data.y?.toFixed(1)})`);
+        }
         this.handlePlayerMoved(data);
       }
     });
@@ -147,7 +195,12 @@ export default class GameScene extends Phaser.Scene {
   // Create or update a network player based on received data
   private createOrUpdateNetworkPlayer(playerData: any) {
     if (!playerData.id) {
-      console.warn('Received player data without ID:', playerData);
+      console.warn('[NETWORK] Received player data without ID:', playerData);
+      return;
+    }
+    
+    // DEBUG LOG: Skip self
+    if (playerData.id === this.myId) {
       return;
     }
     
@@ -155,8 +208,8 @@ export default class GameScene extends Phaser.Scene {
     const timestamp = playerData.timestamp || Date.now();
     const lastUpdate = this.networkUpdateTime.get(playerData.id) || 0;
     
-    // Skip older updates
-    if (timestamp < lastUpdate) {
+    // Skip older updates (but allow if no timestamp provided)
+    if (playerData.timestamp && timestamp < lastUpdate) {
       return;
     }
     
@@ -164,9 +217,9 @@ export default class GameScene extends Phaser.Scene {
     
     let sperm = this.otherPlayers.get(playerData.id);
     
-    // If this player isn't in our network players map
+    // If this player isn't in our network players map, create new sprite
     if (!sperm) {
-      console.log(`Creating new network player: ${playerData.id}`);
+      console.log(`[NETWORK] Creating new network player: ${playerData.id} at (${playerData.x || 0}, ${playerData.y || 0})`);
       
       // Generate a consistent color based on the player ID
       const colorSeed = parseInt(playerData.id.replace(/\D/g, '').slice(0, 6) || '0', 10);

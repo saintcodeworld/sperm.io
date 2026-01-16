@@ -78,8 +78,32 @@ class MultiplayerGameServer {
     this.rooms = new Map();
     this.playerRooms = new Map(); // Track which room each player is in
     this.playerSockets = new Map(); // Track socket ID to player ID mapping
+    this.globalPlayers = new Map(); // DEBUG LOG: Global player state for cross-room visibility
     this.io = io; // Store reference to io
     this.initializeRooms();
+    
+    // DEBUG LOG: Start global game state broadcaster for main-game room
+    this.startGlobalBroadcaster();
+  }
+  
+  // DEBUG LOG: Broadcast all player positions to main-game room at 30 FPS
+  startGlobalBroadcaster() {
+    setInterval(() => {
+      const allPlayers = [];
+      
+      // Collect all players from global state
+      this.globalPlayers.forEach((playerData, playerId) => {
+        allPlayers.push(playerData);
+      });
+      
+      if (allPlayers.length > 0) {
+        // Broadcast to all connected clients in main-game room
+        this.io.to('main-game').emit('global-game-state', {
+          players: allPlayers,
+          timestamp: Date.now()
+        });
+      }
+    }, 1000 / 30); // 30 FPS
   }
 
   initializeRooms() {
@@ -114,6 +138,25 @@ class MultiplayerGameServer {
           this.playerRooms.set(socket.id, roomId);
           this.playerSockets.set(socket.id, playerId);
           
+          // DEBUG LOG: Get spawn position from server state
+          const playerState = room.server.state?.players?.[playerId];
+          const spawnX = playerState?.pos?.x || 2500; // Center fallback
+          const spawnY = playerState?.pos?.y || 2500;
+          const spawnAngle = playerState?.angle || 0;
+          
+          // DEBUG LOG: Store in global player state for cross-room visibility
+          this.globalPlayers.set(playerId, {
+            id: playerId,
+            name: playerName,
+            x: spawnX,
+            y: spawnY,
+            angle: spawnAngle,
+            score: 0,
+            roomId: roomId
+          });
+          
+          console.log(`[SPAWN] Player ${playerId} spawned at x:${spawnX.toFixed(1)}, y:${spawnY.toFixed(1)}`);
+          
           // Join the Socket.IO room
           await socket.join(roomId);
           
@@ -124,12 +167,18 @@ class MultiplayerGameServer {
           
           socket.emit('join-success', { roomId });
           
-          // Broadcast to room that a new player has joined
-          socket.to(roomId).emit('player-joined', { 
+          // DEBUG LOG: Broadcast to ALL players in main-game room (not just roomId)
+          // This ensures all players can see each other regardless of entry fee room
+          socket.to('main-game').emit('player-joined', { 
             playerId, 
             playerName,
+            x: spawnX,
+            y: spawnY,
+            angle: spawnAngle,
             timestamp: Date.now()
           });
+          
+          console.log(`[BROADCAST] Sent player-joined to main-game for ${playerId} at (${spawnX.toFixed(1)}, ${spawnY.toFixed(1)})`);
           
           // Send current players to the new player
           const currentState = room.server.state;
@@ -173,6 +222,20 @@ class MultiplayerGameServer {
       // Process input in game server
       room.server.input(playerId, angle, boost, cashout);
       
+      // Get updated position from server state
+      const playerState = room.server.state?.players?.[playerId];
+      const posX = playerState?.pos?.x || 0;
+      const posY = playerState?.pos?.y || 0;
+      
+      // DEBUG LOG: Update global player state for cross-room visibility
+      if (this.globalPlayers.has(playerId)) {
+        const globalPlayer = this.globalPlayers.get(playerId);
+        globalPlayer.x = posX;
+        globalPlayer.y = posY;
+        globalPlayer.angle = angle;
+        globalPlayer.boost = boost;
+      }
+      
       // Immediately broadcast this player's movement to ALL players in main-game room
       // This ensures all players can see each other regardless of game room
       socket.to('main-game').emit('player-moved', {
@@ -181,14 +244,14 @@ class MultiplayerGameServer {
         boost,
         cashout,
         // Include position data for easier sync
-        x: room.server.state?.players?.[playerId]?.pos?.x || 0,
-        y: room.server.state?.players?.[playerId]?.pos?.y || 0,
+        x: posX,
+        y: posY,
         timestamp: Date.now()
       });
       
       // Debug log for player movement (throttled to avoid console spam)
       if (Math.random() < 0.05) { // Only log ~5% of movements
-        console.log(`[MOVE] Player ${playerId} moved: angle=${angle}, boost=${boost} (broadcast to main-game)`);
+        console.log(`[MOVE] Player ${playerId} at (${posX.toFixed(1)}, ${posY.toFixed(1)}) broadcast to main-game`);
       }
     });
     
@@ -198,6 +261,14 @@ class MultiplayerGameServer {
       if (!roomId) return;
       
       const { playerId, x, y, angle, velocity } = data;
+      
+      // DEBUG LOG: Update global player state for cross-room visibility
+      if (this.globalPlayers.has(playerId)) {
+        const globalPlayer = this.globalPlayers.get(playerId);
+        globalPlayer.x = x;
+        globalPlayer.y = y;
+        globalPlayer.angle = angle;
+      }
       
       // Broadcast to ALL clients in main-game room
       socket.to('main-game').emit('player-position-update', {
@@ -227,11 +298,16 @@ class MultiplayerGameServer {
           if (playerId) {
             room.server.leave(playerId);
             
+            // DEBUG LOG: Remove from global player state
+            this.globalPlayers.delete(playerId);
+            
             // Notify all clients in main-game room that a player has disconnected
-            socket.to('main-game').emit('player-disconnected', {
+            this.io.to('main-game').emit('player-disconnected', {
               playerId,
               timestamp: Date.now()
             });
+            
+            console.log(`[DISCONNECT] Removed player ${playerId} from global state and notified main-game`);
           }
           console.log(`👋 Player disconnected from ${roomId} and main-game`);
         }
@@ -309,39 +385,28 @@ io.on('connection', (socket) => {
   socket.join('main-game');
   console.log(`📌 Socket ${socket.id} joined main-game room`);
   
-  // Get current active players in the main-game room
-  const getMainRoomPlayers = async () => {
+  // DEBUG LOG: Get current active players from global state (simplified and reliable)
+  const getMainRoomPlayers = () => {
     try {
-      const socketsInRoom = await io.in('main-game').fetchSockets();
       const playerData = [];
       
-      // Collect data from all players in the main room
-      for(const roomSocket of socketsInRoom) {
-        // Skip the current socket (new player)
-        if(roomSocket.id === socket.id) continue;
-        
-        const playerId = gameServer.playerSockets.get(roomSocket.id);
-        if(playerId) {
-          // Find which room this player is in to get their data
-          const playerRoomId = gameServer.playerRooms.get(roomSocket.id);
-          if(playerRoomId) {
-            const room = gameServer.rooms.get(playerRoomId);
-            if(room && room.server && room.server.state && room.server.state.players && room.server.state.players[playerId]) {
-              const player = room.server.state.players[playerId];
-              playerData.push({
-                id: playerId,
-                name: player.name,
-                x: player.pos?.x || 0,
-                y: player.pos?.y || 0,
-                angle: player.angle || 0,
-                score: player.score || 0
-              });
-            }
-          }
-        }
+      // Use global player state for reliable cross-room player data
+      gameServer.globalPlayers.forEach((player, playerId) => {
+        playerData.push({
+          id: player.id,
+          name: player.name,
+          x: player.x,
+          y: player.y,
+          angle: player.angle || 0,
+          score: player.score || 0
+        });
+      });
+      
+      console.log(`📊 [EXISTING-PLAYERS] Sending ${playerData.length} players to new connection ${socket.id}`);
+      if (playerData.length > 0) {
+        console.log(`   Players: ${playerData.map(p => `${p.name}(${p.x.toFixed(0)},${p.y.toFixed(0)})`).join(', ')}`);
       }
       
-      console.log(`📊 Sending ${playerData.length} existing players to new connection ${socket.id}`);
       // Send the list of existing players to the new connection
       socket.emit('existing-players', {
         players: playerData,

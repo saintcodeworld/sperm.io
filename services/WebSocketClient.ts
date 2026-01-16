@@ -17,6 +17,8 @@ export class WebSocketClient {
   private playerPositionUpdateCallbacks: ((data: any) => void)[] = [];
   private existingPlayersCallbacks: ((data: any) => void)[] = [];
   private playerDisconnectedCallbacks: ((data: any) => void)[] = [];
+  private playerJoinedCallbacks: ((data: any) => void)[] = []; // DEBUG LOG: New player join events
+  private globalGameStateCallbacks: ((data: any) => void)[] = []; // DEBUG LOG: Global game state updates
   private connected = false;
   private connectionPromise: Promise<void> | null = null;
 
@@ -131,6 +133,21 @@ export class WebSocketClient {
       this.socket.on('player-disconnected', (data: any) => {
         console.log('DEBUG: Player disconnected event:', data.playerId);
         this.playerDisconnectedCallbacks.forEach(callback => callback(data));
+      });
+      
+      // DEBUG LOG: Handle player-joined events (when a new player joins the game)
+      this.socket.on('player-joined', (data: any) => {
+        console.log('DEBUG: Player joined event:', data.playerId, 'at position:', data.x, data.y);
+        this.playerJoinedCallbacks.forEach(callback => callback(data));
+      });
+      
+      // DEBUG LOG: Handle global-game-state events (all players in main-game room)
+      this.socket.on('global-game-state', (data: any) => {
+        // Only log occasionally to avoid spam
+        if (Math.random() < 0.01) {
+          console.log('DEBUG: Global game state update, players:', data.players?.length || 0);
+        }
+        this.globalGameStateCallbacks.forEach(callback => callback(data));
       });
       
       // Handle direct position updates from other players
@@ -258,6 +275,28 @@ export class WebSocketClient {
       const index = this.playerDisconnectedCallbacks.indexOf(callback);
       if (index > -1) {
         this.playerDisconnectedCallbacks.splice(index, 1);
+      }
+    };
+  }
+  
+  // DEBUG LOG: Method to listen for player-joined events
+  onPlayerJoined(callback: (data: any) => void) {
+    this.playerJoinedCallbacks.push(callback);
+    return () => {
+      const index = this.playerJoinedCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.playerJoinedCallbacks.splice(index, 1);
+      }
+    };
+  }
+  
+  // DEBUG LOG: Method to listen for global-game-state events
+  onGlobalGameState(callback: (data: any) => void) {
+    this.globalGameStateCallbacks.push(callback);
+    return () => {
+      const index = this.globalGameStateCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.globalGameStateCallbacks.splice(index, 1);
       }
     };
   }

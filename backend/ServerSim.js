@@ -67,11 +67,20 @@ export class ServerSim {
       this.playerJoinTime.set(id, Date.now());
 
       const color = this.getRandomColor();
-      const margin = 500;
+      
+      // DEBUG LOG: Spawn players in a tighter central zone so they can see each other
+      // Original: margin=500 meant spawn range [500, 4500] = 4000 unit spread
+      // New: spawn in center 1000x1000 area around map center (2500, 2500)
+      const centerX = ARENA_SIZE / 2; // 2500
+      const centerY = ARENA_SIZE / 2; // 2500
+      const spawnRadius = 500; // Players spawn within 500 units of center
+      
       const startPos = {
-        x: margin + Math.random() * (ARENA_SIZE - margin * 2),
-        y: margin + Math.random() * (ARENA_SIZE - margin * 2)
+        x: centerX + (Math.random() - 0.5) * spawnRadius * 2, // Range: [2000, 3000]
+        y: centerY + (Math.random() - 0.5) * spawnRadius * 2  // Range: [2000, 3000]
       };
+      
+      console.log(`[SPAWN] Player ${id} spawning at (${startPos.x.toFixed(1)}, ${startPos.y.toFixed(1)}) - center zone`);
 
       const initialAngle = Math.random() * Math.PI * 2;
       const segments = Array(INITIAL_LENGTH).fill(null).map((_, i) => ({
