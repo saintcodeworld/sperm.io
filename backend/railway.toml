@@ -6,3 +6,4 @@ buildCommand = "npm install"
 startCommand = "npm run game-server"
 healthcheckPath = "/"
 healthcheckTimeout = 180
+healthcheckProtocol = "http"

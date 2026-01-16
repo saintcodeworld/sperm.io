@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { createServer } from 'http';
@@ -11,20 +12,18 @@ const __dirname = dirname(__filename);
 
 dotenv.config({ path: join(__dirname, '..', '.env.local') });
 
-// Create HTTP server for Socket.io
-const httpServer = createServer((req, res) => {
-  // Add a health check endpoint for Railway
-  if (req.url === '/') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', message: 'Game server is running' }));
-    return;
-  }
-  
-  // Handle other routes
-  res.writeHead(404);
-  res.end('Not found');
+// Create Express app
+const app = express();
+
+// Health check endpoint for Railway
+app.get('/', (req, res) => {
+  res.status(200).json({ status: 'ok', message: 'Game server is running' });
 });
 
+// Create HTTP server using Express
+const httpServer = createServer(app);
+
+// Set up Socket.io
 const io = new Server(httpServer, {
   cors: {
     origin: "*", // In production, set to your domain
