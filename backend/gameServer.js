@@ -42,6 +42,7 @@ class MultiplayerGameServer {
     this.rooms = new Map();
     this.playerRooms = new Map(); // Track which room each player is in
     this.playerSockets = new Map(); // Track socket ID to player ID mapping
+    this.io = io; // Store reference to io
     this.initializeRooms();
   }
 
@@ -125,19 +126,32 @@ class MultiplayerGameServer {
   }
 
   startGameStateUpdates(socket, room) {
-    const updateInterval = setInterval(() => {
-      if (!socket.connected) {
-        clearInterval(updateInterval);
-        return;
-      }
+    const roomId = this.playerRooms.get(socket.id);
+    if (!roomId) return;
+    
+    // Only create one update interval per room if it doesn't exist already
+    if (!room.updateInterval) {
+      console.log(`🔄 Starting game state broadcasts for room ${roomId}`);
       
-      // Get current game state
-      const state = room.server.state;
-      socket.emit('game-state', state);
-    }, 1000 / 60); // 60 FPS updates
+      room.updateInterval = setInterval(() => {
+        // Get current game state
+        const state = room.server.state;
+        
+        // Broadcast to all clients in the room
+        this.io.to(roomId).emit('game-state', state);
+        
+        // Debug log - count players in room
+        console.log(`Room ${roomId}: ${room.players.size} players connected`);
+      }, 1000 / 30); // 30 FPS updates for network efficiency
+    }
 
     socket.on('disconnect', () => {
-      clearInterval(updateInterval);
+      // Only clear the interval if this is the last player in the room
+      if (room.players.size <= 1) {
+        console.log(`🛑 Stopping game state broadcasts for room ${roomId}`);
+        clearInterval(room.updateInterval);
+        room.updateInterval = null;
+      }
     });
   }
 }
