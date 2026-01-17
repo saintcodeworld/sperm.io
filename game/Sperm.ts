@@ -1,6 +1,10 @@
 
 import Phaser from 'phaser';
-import { PlayerData } from '../types';
+import { PlayerData, SEGMENT_DISTANCE } from '../types';
+
+// Segment distance for local tracking
+const LOCAL_SEGMENT_DISTANCE = SEGMENT_DISTANCE || 8;
+const INITIAL_SEGMENT_COUNT = 30;
 
 export class Sperm {
   private scene: Phaser.Scene;
@@ -9,6 +13,10 @@ export class Sperm {
   private nameText: Phaser.GameObjects.Text;
   private id: string;
   private color: number;
+  
+  // Local segment tracking for client-controlled movement
+  private localSegments: { x: number; y: number }[] = [];
+  private isLocalPlayer: boolean = false;
   
   public getColor(): number {
     return this.color;
@@ -19,83 +27,131 @@ export class Sperm {
     this.id = data.id;
     this.color = data.color;
 
-    // Head - Realistic sperm head (Thicker and larger)
-    this.head = scene.add.ellipse(data.pos.x, data.pos.y, 30, 22, this.color);
-    this.head.setStrokeStyle(2, 0x000000, 1);
+    // Head - Realistic sperm head (oval shape)
+    this.head = scene.add.ellipse(data.pos.x, data.pos.y, 28, 20, this.color);
+    this.head.setStrokeStyle(2, 0xffffff, 0.6);
     
-    // Enable physics on head for velocity control
-    if (scene.physics && scene.physics.world) {
-      scene.physics.world.enable(this.head);
-    }
-    
-    // Tail
+    // Tail graphics
     this.tailGraphics = scene.add.graphics();
     
-    // Name
-    this.nameText = scene.add.text(data.pos.x, data.pos.y - 25, data.name, {
-      fontSize: '14px',
+    // Name label
+    this.nameText = scene.add.text(data.pos.x, data.pos.y - 28, data.name, {
+      fontSize: '12px',
       color: '#ffffff',
       fontStyle: 'bold',
       stroke: '#000000',
       strokeThickness: 2
     }).setOrigin(0.5);
 
-    // Depth sorting
-    this.head.setDepth(10);
+    // Initialize local segments from server data or create fresh
+    if (data.segments && data.segments.length > 0) {
+      this.localSegments = data.segments.map(s => ({ x: s.x, y: s.y }));
+    } else {
+      // Create initial segments trailing behind the head
+      const angle = data.angle || 0;
+      for (let i = 0; i < INITIAL_SEGMENT_COUNT; i++) {
+        this.localSegments.push({
+          x: data.pos.x - Math.cos(angle) * i * LOCAL_SEGMENT_DISTANCE,
+          y: data.pos.y - Math.sin(angle) * i * LOCAL_SEGMENT_DISTANCE
+        });
+      }
+    }
+
+    // Depth sorting - tail behind head
     this.tailGraphics.setDepth(5);
+    this.head.setDepth(10);
     this.nameText.setDepth(15);
+    
+    // Draw initial tail
+    this.drawTail();
+  }
+
+  // Mark this sperm as the local player (for client-side segment tracking)
+  public setAsLocalPlayer(): void {
+    this.isLocalPlayer = true;
+  }
+
+  // Draw the tail/trail based on segments
+  private drawTail(): void {
+    this.tailGraphics.clear();
+    
+    if (this.localSegments.length < 2) return;
+    
+    const baseWidth = 12;
+    const segmentCount = this.localSegments.length;
+    
+    // Draw tail as connected line segments with tapering
+    for (let i = 1; i < segmentCount; i++) {
+      const seg = this.localSegments[i];
+      const prevSeg = this.localSegments[i - 1];
+      
+      // Calculate tapering - thinner towards the end
+      const progress = i / segmentCount;
+      const thickness = Math.max(2, baseWidth * (1 - progress * 0.85));
+      const alpha = 0.9 * (1 - progress * 0.7);
+      
+      this.tailGraphics.lineStyle(thickness, this.color, alpha);
+      this.tailGraphics.beginPath();
+      this.tailGraphics.moveTo(prevSeg.x, prevSeg.y);
+      this.tailGraphics.lineTo(seg.x, seg.y);
+      this.tailGraphics.strokePath();
+    }
+  }
+
+  // Update segments to follow the head position (for local player)
+  public updateLocalSegments(): void {
+    if (this.localSegments.length === 0) return;
+    
+    // First segment follows the head
+    this.localSegments[0] = { x: this.head.x, y: this.head.y };
+    
+    // Each subsequent segment follows the one before it
+    for (let i = 1; i < this.localSegments.length; i++) {
+      const seg = this.localSegments[i];
+      const prev = this.localSegments[i - 1];
+      const dist = Math.hypot(prev.x - seg.x, prev.y - seg.y);
+      
+      if (dist > LOCAL_SEGMENT_DISTANCE) {
+        const angle = Math.atan2(prev.y - seg.y, prev.x - seg.x);
+        seg.x = prev.x - Math.cos(angle) * LOCAL_SEGMENT_DISTANCE;
+        seg.y = prev.y - Math.sin(angle) * LOCAL_SEGMENT_DISTANCE;
+      }
+    }
+    
+    // Update name position above head
+    this.nameText.setPosition(this.head.x, this.head.y - 28);
+    
+    // Redraw the tail
+    this.drawTail();
+  }
+
+  // Get segments for hitbox collision detection
+  public getSegments(): { x: number; y: number }[] {
+    return this.localSegments;
   }
 
   public update(data: PlayerData) {
     this.head.setPosition(data.pos.x, data.pos.y);
     this.head.setRotation(data.angle);
-    this.nameText.setPosition(data.pos.x, data.pos.y - 30);
+    this.nameText.setPosition(data.pos.x, data.pos.y - 28);
     
-    // Growth logic: Head stays same size for player. Bots scale with SOL value.
-    const scaleFactor = data.id.startsWith('bot_') 
-      ? Math.max(1, 0.8 + data.solValue * 2) 
-      : 1;
-    this.head.setScale(scaleFactor);
-
-    // Visual feedback for high-value targets
-    if (data.id.startsWith('bot_') && data.solValue > 0.1) {
-      this.head.setStrokeStyle(4, 0xffffff, 0.8);
+    // Update segments from server data (for other players)
+    if (data.segments && data.segments.length > 0) {
+      this.localSegments = data.segments.map(s => ({ x: s.x, y: s.y }));
     } else {
-      this.head.setStrokeStyle(2, 0xffffff, 0.5);
+      // If no segments provided, update locally
+      this.updateLocalSegments();
     }
-
-    // Draw Biological Tail with optimized rendering
-    this.tailGraphics.clear();
     
-    if (data.segments.length > 0) {
-      const baseWidth = 14 * scaleFactor; // Thicker tail
-      const maxSegments = 10; // Limit number of tail segments for performance
-      
-      // Calculate how many segments to skip based on total length
-      const skipFactor = data.segments.length > maxSegments ? Math.floor(data.segments.length / maxSegments) : 1;
-      
-      this.tailGraphics.beginPath();
-      this.tailGraphics.moveTo(data.pos.x, data.pos.y);
-      
-      // Only render a subset of segments - using distance-based level of detail
-      for (let i = 0; i < data.segments.length; i += skipFactor) {
-        const seg = data.segments[i];
-        // Tapering: Get thinner towards the end
-        const progress = i / data.segments.length;
-        const thickness = Math.max(2, baseWidth * (1 - progress * 0.8));
-        const alpha = 0.8 * (1 - progress * 0.6);
-        
-        // For better performance, make fewer style changes
-        if (i % (skipFactor * 2) === 0 || i === 0) {
-          this.tailGraphics.lineStyle(thickness, this.color, alpha);
-        }
-        
-        this.tailGraphics.lineTo(seg.x, seg.y);
-      }
-      
-      // More efficient: stroke only once at the end
-      this.tailGraphics.strokePath();
+    // Visual feedback for high-value targets
+    if (data.solValue > 0.15) {
+      this.head.setStrokeStyle(3, 0xffffff, 0.9);
+    } else {
+      this.head.setStrokeStyle(2, 0xffffff, 0.6);
     }
+    
+    // Draw the tail
+    this.drawTail();
   }
 
   public destroy() {
@@ -108,24 +164,30 @@ export class Sperm {
     return this.head;
   }
 
-  // Update non-position properties (score, solValue, etc)
+  // Update non-position properties and draw tail (for local player)
   public updateNonPosition(data: PlayerData) {
-    // Update everything except position and angle
+    // Update name with SOL value
     if (data.solValue !== undefined) {
       this.nameText.setText(`${data.name} (${data.solValue.toFixed(2)} SOL)`);
     }
     
-    // Growth logic
-    const scaleFactor = this.id.startsWith('bot_')
-      ? Math.max(1, 0.8 + data.solValue * 2)
-      : 1;
-    this.head.setScale(scaleFactor);
-
-    // Visual feedback for high-value targets
-    if (this.id.startsWith('bot_') && data.solValue > 0.1) {
-      this.head.setStrokeStyle(4, 0xffffff, 0.8);
+    // Visual feedback for value
+    if (data.solValue > 0.15) {
+      this.head.setStrokeStyle(3, 0xffffff, 0.9);
     } else {
-      this.head.setStrokeStyle(2, 0xffffff, 0.5);
+      this.head.setStrokeStyle(2, 0xffffff, 0.6);
     }
+    
+    // Sync segments from server if available (for hitbox accuracy)
+    if (data.segments && data.segments.length > 0) {
+      // Only sync length, not positions (local player controls position)
+      while (this.localSegments.length < data.segments.length) {
+        const lastSeg = this.localSegments[this.localSegments.length - 1];
+        this.localSegments.push({ ...lastSeg });
+      }
+    }
+    
+    // Update segments to follow head and redraw tail
+    this.updateLocalSegments();
   }
 }

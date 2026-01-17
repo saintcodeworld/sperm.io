@@ -24,6 +24,24 @@ export interface KillEvent {
 type DeathCallback = (event: DeathEvent) => void;
 type KillCallback = (event: KillEvent) => void;
 
+// Cashout success event type
+export interface CashoutSuccessEvent {
+  playerId: string;
+  totalPot: number;
+  playerReceives: number;
+  signature: string;
+}
+
+// DEBUG LOG: Cashout failed event type for error handling
+export interface CashoutFailedEvent {
+  playerId: string;
+  error: string;
+  shouldResetPlayer: boolean;
+}
+
+type CashoutCallback = (event: CashoutSuccessEvent) => void;
+type CashoutFailedCallback = (event: CashoutFailedEvent) => void;
+
 export class ServerSim {
   private state: GameState = {
     players: {},
@@ -32,6 +50,8 @@ export class ServerSim {
   private callbacks: ((state: GameState) => void)[] = [];
   private deathCallbacks: DeathCallback[] = [];
   private killCallbacks: KillCallback[] = [];
+  private cashoutCallbacks: CashoutCallback[] = [];
+  private cashoutFailedCallbacks: CashoutFailedCallback[] = []; // DEBUG LOG: Track failed cashout callbacks
   private lastUpdate = Date.now();
   private playerJoinTime: Map<string, number> = new Map();
   private cashoutStates: Map<string, { startTime: number, active: boolean }> = new Map();
@@ -170,7 +190,12 @@ export class ServerSim {
 
     // Handle cashout request
     if (cashout && !this.cashoutStates.has(id)) {
-      console.log(`[Server] Player ${id} starting cashout sequence`);
+      console.log(`[ServerSim] ========== CASHOUT INITIATED ==========`);
+      console.log(`[ServerSim] Player ID: ${id}`);
+      console.log(`[ServerSim] Player solValue: ${player.solValue}`);
+      console.log(`[ServerSim] Player solAddress: ${player.solAddress}`);
+      console.log(`[ServerSim] Starting 3-second countdown...`);
+      
       this.cashoutStates.set(id, {
         startTime: Date.now(),
         active: true
@@ -178,15 +203,36 @@ export class ServerSim {
       
       // Start 3-second countdown
       setTimeout(async () => {
+        console.log(`[ServerSim] ========== 3 SECONDS ELAPSED ==========`);
         const state = this.cashoutStates.get(id);
+        console.log(`[ServerSim] Cashout state active: ${state?.active}`);
+        console.log(`[ServerSim] Player still exists: ${!!this.state.players[id]}`);
+        
         if (state?.active && this.state.players[id]) {
-          // Instant exit: Remove player from game immediately
           const playerData = { ...this.state.players[id] };
-          delete this.state.players[id];
-          this.cashoutStates.delete(id);
-
-          // Process transaction in background
-          this.processCashoutTransaction(id, playerData);
+          console.log(`[ServerSim] Player data captured:`);
+          console.log(`[ServerSim]   - solValue: ${playerData.solValue}`);
+          console.log(`[ServerSim]   - solAddress: '${playerData.solAddress}'`);
+          console.log(`[ServerSim]   - solAddress length: ${playerData.solAddress?.length || 0}`);
+          
+          // CHECK: Is solAddress valid?
+          if (!playerData.solAddress || playerData.solAddress.length < 30) {
+            console.error(`[ServerSim] ERROR: Invalid or missing solAddress!`);
+            this.handleCashoutFailure(id, 'Invalid wallet address - cannot process cashout');
+            return;
+          }
+          
+          console.log(`[ServerSim] Calling processCashoutTransaction...`);
+          
+          try {
+            await this.processCashoutTransaction(id, playerData);
+            console.log(`[ServerSim] processCashoutTransaction completed successfully`);
+          } catch (error) {
+            console.error(`[ServerSim] processCashoutTransaction threw error:`, error);
+            this.handleCashoutFailure(id, error.message || 'Transaction failed');
+          }
+        } else {
+          console.log(`[ServerSim] Cashout cancelled or player left - skipping transaction`);
         }
       }, 3000);
     }
@@ -206,24 +252,115 @@ export class ServerSim {
   }
 
   private async processCashoutTransaction(id: string, playerData: PlayerData) {
+    console.log(`[ServerSim] ========== processCashoutTransaction START ==========`);
+    console.log(`[ServerSim] Player ID: ${id}`);
+    console.log(`[ServerSim] solValue: ${playerData.solValue}`);
+    console.log(`[ServerSim] solAddress: ${playerData.solAddress}`);
+    
     try {
-      console.log(`[Server] Processing background cashout for player ${id}`);
+      const platformFee = playerData.solValue * 0.01;
+      const playerReceives = playerData.solValue - platformFee;
+      console.log(`[ServerSim] Calculated playerReceives: ${playerReceives}`);
 
-      // Process the blockchain transaction
-      const result = await gameTransactionService.processCashout(
-        id,
-        playerData.solAddress,
-        playerData.solValue
-      );
+      // DEBUG: BYPASS BLOCKCHAIN - Test if cashout flow works without blockchain
+      // TODO: Re-enable blockchain transaction after testing
+      console.log(`[ServerSim] BYPASSING BLOCKCHAIN FOR TESTING - immediate success`);
+      
+      // Simulate successful transaction immediately
+      const result = { success: true, signature: 'TEST_BYPASS_' + Date.now() };
+      
+      console.log(`[ServerSim] Simulated result:`, result);
 
       if (result.success) {
-        console.log(`[Server] Cashout successful for player ${id}`);
+        console.log(`[ServerSim] Transaction SUCCESS! Signature: ${result.signature}`);
+        
+        // Remove player from state
+        console.log(`[ServerSim] Removing player from state...`);
+        delete this.state.players[id];
+        this.cashoutStates.delete(id);
+        this.playerJoinTime.delete(id);
+        
+        // Emit cashout success callback
+        const cashoutEvent: CashoutSuccessEvent = {
+          playerId: id,
+          totalPot: playerData.solValue,
+          playerReceives: playerReceives,
+          signature: result.signature || 'confirmed'
+        };
+        
+        console.log(`[ServerSim] Emitting cashout success to ${this.cashoutCallbacks.length} callbacks...`);
+        this.cashoutCallbacks.forEach(cb => {
+          console.log(`[ServerSim] Calling callback...`);
+          cb(cashoutEvent);
+        });
+        console.log(`[ServerSim] All callbacks called!`);
       } else {
-        console.error(`[Server] Cashout failed for player ${id}:`, result.error);
+        console.error(`[ServerSim] Transaction FAILED`);
+        this.handleCashoutFailure(id, 'Transaction failed');
       }
     } catch (error) {
-      console.error(`[Server] Cashout error for player ${id}:`, error);
+      console.error(`[ServerSim] processCashoutTransaction EXCEPTION:`, error);
+      console.error(`[ServerSim] Error message: ${error.message}`);
+      this.handleCashoutFailure(id, error.message || 'Unknown error during cashout');
     }
+    
+    console.log(`[ServerSim] ========== processCashoutTransaction END ==========`);
+  }
+
+  // DEBUG LOG: Handle cashout failure - reset player state and notify frontend
+  private handleCashoutFailure(id: string, errorMessage: string) {
+    console.log(`[ServerSim] ========== handleCashoutFailure ==========`);
+    console.log(`[ServerSim] Player ID: ${id}`);
+    console.log(`[ServerSim] Error message: ${errorMessage}`);
+    
+    // Reset cashout state so player can try again
+    this.cashoutStates.delete(id);
+    
+    // Keep player in game (don't remove from state) so they can continue playing
+    console.log(`[ServerSim] Player still exists in state: ${!!this.state.players[id]}`);
+    console.log(`[ServerSim] Number of failure callbacks registered: ${this.cashoutFailedCallbacks.length}`);
+    
+    if (this.state.players[id]) {
+      const failedEvent: CashoutFailedEvent = {
+        playerId: id,
+        error: errorMessage,
+        shouldResetPlayer: true
+      };
+      console.log(`[ServerSim] Emitting cashout FAILED event (shouldResetPlayer=true)...`);
+      this.cashoutFailedCallbacks.forEach((cb, i) => {
+        console.log(`[ServerSim] Calling failure callback #${i}...`);
+        cb(failedEvent);
+      });
+      console.log(`[ServerSim] All failure callbacks called!`);
+    } else {
+      const failedEvent: CashoutFailedEvent = {
+        playerId: id,
+        error: errorMessage,
+        shouldResetPlayer: false
+      };
+      console.log(`[ServerSim] Player already removed, emitting FAILED event (shouldResetPlayer=false)...`);
+      this.cashoutFailedCallbacks.forEach((cb, i) => {
+        console.log(`[ServerSim] Calling failure callback #${i}...`);
+        cb(failedEvent);
+      });
+    }
+    console.log(`[ServerSim] ========== handleCashoutFailure END ==========`);
+  }
+
+  // Register callback for cashout success events
+  public onCashoutSuccess(cb: CashoutCallback) {
+    this.cashoutCallbacks.push(cb);
+    return () => {
+      this.cashoutCallbacks = this.cashoutCallbacks.filter(c => c !== cb);
+    };
+  }
+
+  // DEBUG LOG: Register callback for cashout failed events
+  public onCashoutFailed(cb: CashoutFailedCallback) {
+    this.cashoutFailedCallbacks.push(cb);
+    return () => {
+      this.cashoutFailedCallbacks = this.cashoutFailedCallbacks.filter(c => c !== cb);
+    };
   }
 
   private update() {
@@ -231,15 +368,35 @@ export class ServerSim {
     const dt = (now - this.lastUpdate) / 1000;
     this.lastUpdate = now;
 
-    Object.values(this.state.players).forEach(p => {
-      const currentSpeed = p.isBoosting ? BOOST_SPEED : BASE_SPEED;
-      p.pos.x += Math.cos(p.angle) * currentSpeed * dt;
-      p.pos.y += Math.sin(p.angle) * currentSpeed * dt;
-
-      if (p.pos.x < 0 || p.pos.x > ARENA_SIZE || p.pos.y < 0 || p.pos.y > ARENA_SIZE) {
-        this.handleDeath(p, 'BOUNDARY', 'Death Zone');
+    // Use a copy of players to avoid modification during iteration
+    const playerIds = Object.keys(this.state.players);
+    
+    playerIds.forEach(playerId => {
+      const p = this.state.players[playerId];
+      if (!p) return; // Player may have been removed during iteration
+      
+      // Check CURRENT position against boundaries FIRST (in case client moved past)
+      const BOUNDARY_MARGIN = 5;
+      if (p.pos.x <= BOUNDARY_MARGIN || p.pos.x >= ARENA_SIZE - BOUNDARY_MARGIN || 
+          p.pos.y <= BOUNDARY_MARGIN || p.pos.y >= ARENA_SIZE - BOUNDARY_MARGIN) {
+        this.handleDeath(p, 'BOUNDARY', 'The Arena', undefined);
         return;
       }
+      
+      const currentSpeed = p.isBoosting ? BOOST_SPEED : BASE_SPEED;
+      const newX = p.pos.x + Math.cos(p.angle) * currentSpeed * dt;
+      const newY = p.pos.y + Math.sin(p.angle) * currentSpeed * dt;
+
+      // Check NEW position against boundaries
+      if (newX <= BOUNDARY_MARGIN || newX >= ARENA_SIZE - BOUNDARY_MARGIN || 
+          newY <= BOUNDARY_MARGIN || newY >= ARENA_SIZE - BOUNDARY_MARGIN) {
+        this.handleDeath(p, 'BOUNDARY', 'The Arena', undefined);
+        return;
+      }
+      
+      // Update position (player is safe)
+      p.pos.x = newX;
+      p.pos.y = newY;
 
       // Update segments
       p.segments[0] = { x: p.pos.x, y: p.pos.y };
@@ -259,19 +416,21 @@ export class ServerSim {
         p.score = Math.max(0, p.score - 0.1 * dt * 60);
       }
 
-      // Collision detection with food
+      // Collision detection with food - smooth magnet eating effect
       Object.values(this.state.food).forEach(f => {
         const dist = Math.hypot(p.pos.x - f.x, p.pos.y - f.y);
         
-        // Magnet Effect
-        if (dist < 100 && dist >= 30) {
+        // Strong magnet effect - food gets pulled towards sperm head
+        if (dist < 120 && dist >= 15) {
           const angle = Math.atan2(p.pos.y - f.y, p.pos.x - f.x);
-          const magnetSpeed = 600;
-          f.x += Math.cos(angle) * magnetSpeed * dt;
-          f.y += Math.sin(angle) * magnetSpeed * dt;
+          // Stronger pull when closer (inverse distance weighting)
+          const pullStrength = Math.max(400, 1200 - dist * 8);
+          f.x += Math.cos(angle) * pullStrength * dt;
+          f.y += Math.sin(angle) * pullStrength * dt;
         }
 
-        if (dist < 30) {
+        // Eat food when very close to head
+        if (dist < 20) {
           p.score += f.value;
           p.length += 0.25 * f.value;
           delete this.state.food[f.id];

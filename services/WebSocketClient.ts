@@ -2,8 +2,8 @@ import { io, Socket } from 'socket.io-client';
 import { GameState } from '../types';
 import { DeathEvent, KillEvent } from './ServerSim';
 
-// Fallback URL in case environment variable fails during build
-const SOCKET_URL = import.meta.env.VITE_GAME_SERVER_URL || 'https://compassionate-illumination-production-6200.up.railway.app';
+// WebSocket URL for multiplayer server
+const SOCKET_URL = import.meta.env.VITE_GAME_SERVER_URL || 'http://localhost:3002';
 
 console.log('DEBUG: Configured WebSocket URL:', SOCKET_URL);
 
@@ -19,8 +19,11 @@ export class WebSocketClient {
   private playerDisconnectedCallbacks: ((data: any) => void)[] = [];
   private playerJoinedCallbacks: ((data: any) => void)[] = []; // DEBUG LOG: New player join events
   private globalGameStateCallbacks: ((data: any) => void)[] = []; // DEBUG LOG: Global game state updates
+  private cashoutSuccessCallbacks: ((data: any) => void)[] = []; // DEBUG LOG: Cashout success callbacks
+  private cashoutFailedCallbacks: ((data: any) => void)[] = []; // DEBUG LOG: Cashout failed callbacks
   private connected = false;
   private connectionPromise: Promise<void> | null = null;
+  private connectionFailed = false; // Track if connection has failed to prevent spam
 
   connect(serverUrl: string = SOCKET_URL): Promise<void> {
     if (this.connectionPromise) {
@@ -46,12 +49,12 @@ export class WebSocketClient {
         transports: ['websocket'],
         // Secure connection for HTTPS/WSS URLs
         secure: isSecure,
-        // Reconnection settings - more aggressive for multiplayer with increased timeouts
-        timeout: 20000, // Increased from 15000 to 20000
-        reconnection: true,
-        reconnectionAttempts: 15,
-        reconnectionDelay: 500,
-        reconnectionDelayMax: 2000,
+        // Reduced reconnection attempts to avoid console spam
+        timeout: 10000,
+        reconnection: !this.connectionFailed, // Disable reconnection if already failed
+        reconnectionAttempts: 3, // Reduced from 15 to 3
+        reconnectionDelay: 2000, // Increased from 500 to 2000
+        reconnectionDelayMax: 5000, // Increased from 2000 to 5000
         // Force new connection on each connect call
         forceNew: true,
         // Path for socket.io (default)
@@ -77,6 +80,11 @@ export class WebSocketClient {
         console.error('🔌 Connection error:', error);
         console.error('DEBUG: Connection Error:', error.message);
         this.connected = false;
+        this.connectionFailed = true;
+        // Disable further reconnection attempts
+        if (this.socket) {
+          this.socket.io.opts.reconnection = false;
+        }
         reject(error);
       });
       
@@ -96,63 +104,62 @@ export class WebSocketClient {
       
       this.socket.on('reconnect_failed', () => {
         console.error('DEBUG: Failed to reconnect after all attempts');
+        this.connectionFailed = true;
+        // Disable further reconnection attempts
+        if (this.socket) {
+          this.socket.io.opts.reconnection = false;
+        }
       });
       
       this.socket.on('game-state', (state: GameState) => {
-        console.log('DEBUG: Received game state update with players:', 
-          state.players ? Object.keys(state.players).length : 0);
         this.gameStateCallbacks.forEach(callback => callback(state));
       });
       
       // Handle direct player movement events for more responsive gameplay
       this.socket.on('player-moved', (data: any) => {
-        console.log('DEBUG: Player moved event received:', data.playerId);
-        // Log position data if available for debugging
-        if (data.x !== undefined && data.y !== undefined) {
-          console.log(`DEBUG: Player ${data.playerId} at position x:${data.x.toFixed(1)}, y:${data.y.toFixed(1)}`);
-        }
         this.playerMovedCallbacks.forEach(callback => callback(data));
       });
       
       // Handle current players list when joining a room
       this.socket.on('current-players', (data: any) => {
-        console.log('DEBUG: Received current players in room:', data.players?.length || 0);
         this.currentPlayersCallbacks.forEach(callback => callback(data));
       });
       
       // Handle existing players in main-game room when joining
       this.socket.on('existing-players', (data: any) => {
-        console.log('DEBUG: Received existing players in main-game room:', data.players?.length || 0);
-        if (data.players?.length > 0) {
-          console.log('DEBUG: First player in list:', data.players[0]);
-        }
         this.existingPlayersCallbacks.forEach(callback => callback(data));
       });
       
       // Handle player disconnection events
       this.socket.on('player-disconnected', (data: any) => {
-        console.log('DEBUG: Player disconnected event:', data.playerId);
         this.playerDisconnectedCallbacks.forEach(callback => callback(data));
       });
       
-      // DEBUG LOG: Handle player-joined events (when a new player joins the game)
+      // Handle player-joined events (when a new player joins the game)
       this.socket.on('player-joined', (data: any) => {
-        console.log('DEBUG: Player joined event:', data.playerId, 'at position:', data.x, data.y);
         this.playerJoinedCallbacks.forEach(callback => callback(data));
       });
       
-      // DEBUG LOG: Handle global-game-state events (all players in main-game room)
+      // Handle global-game-state events (all players in main-game room)
       this.socket.on('global-game-state', (data: any) => {
-        // Only log occasionally to avoid spam
-        if (Math.random() < 0.01) {
-          console.log('DEBUG: Global game state update, players:', data.players?.length || 0);
-        }
         this.globalGameStateCallbacks.forEach(callback => callback(data));
       });
       
       // Handle direct position updates from other players
       this.socket.on('player-position-update', (data: any) => {
         this.playerPositionUpdateCallbacks.forEach(callback => callback(data));
+      });
+      
+      // DEBUG LOG: Handle cashout success from multiplayer server
+      this.socket.on('cashout-success', (data: any) => {
+        console.log('[WebSocket] Received cashout-success event:', data);
+        this.cashoutSuccessCallbacks.forEach(callback => callback(data));
+      });
+      
+      // DEBUG LOG: Handle cashout failed from multiplayer server
+      this.socket.on('cashout-failed', (data: any) => {
+        console.log('[WebSocket] Received cashout-failed event:', data);
+        this.cashoutFailedCallbacks.forEach(callback => callback(data));
       });
       
       this.socket.on('join-success', (data) => {
@@ -167,15 +174,23 @@ export class WebSocketClient {
     return this.connectionPromise;
   }
 
-  joinRoom(roomId: string, playerId: string, playerName: string, entryFee: number): Promise<void> {
+  joinRoom(roomId: string, playerId: string, playerName: string, entryFee: number, solAddress?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.socket || !this.connected) {
         reject(new Error('Not connected to game server'));
         return;
       }
       
-      console.log(`🎮 Joining room ${roomId} as ${playerName}...`);
+      console.log(`[WebSocket] Joining room with solAddress: ${solAddress}`);
       
+      this.socket.emit('join-room', {
+        roomId,
+        playerId,
+        playerName,
+        entryFee,
+        solAddress // DEBUG LOG: Pass wallet address to multiplayer backend
+      });
+
       // Set up one-time listeners for join result
       const onJoinSuccess = () => {
         console.log(`✅ Successfully joined room ${roomId}`);
@@ -215,6 +230,11 @@ export class WebSocketClient {
     if (!this.socket || !this.connected) {
       console.warn('⚠️ Cannot send input: not connected to game server');
       return;
+    }
+    
+    // DEBUG LOG: Track what we're sending
+    if (cashout) {
+      console.log(`[WebSocket] EMITTING player-input: playerId=${playerId}, cashout=${cashout}`);
     }
     
     this.socket.emit('player-input', {
@@ -363,6 +383,28 @@ export class WebSocketClient {
     };
   }
 
+  // DEBUG LOG: Register callback for cashout success from multiplayer server
+  onCashoutSuccess(callback: (data: any) => void) {
+    this.cashoutSuccessCallbacks.push(callback);
+    return () => {
+      const index = this.cashoutSuccessCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.cashoutSuccessCallbacks.splice(index, 1);
+      }
+    };
+  }
+
+  // DEBUG LOG: Register callback for cashout failed from multiplayer server
+  onCashoutFailed(callback: (data: any) => void) {
+    this.cashoutFailedCallbacks.push(callback);
+    return () => {
+      const index = this.cashoutFailedCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.cashoutFailedCallbacks.splice(index, 1);
+      }
+    };
+  }
+
   isConnected(): boolean {
     return this.connected;
   }
@@ -373,6 +415,7 @@ export class WebSocketClient {
       this.socket = null;
       this.connected = false;
       this.connectionPromise = null;
+      this.connectionFailed = false; // Reset for future connection attempts
     }
   }
 

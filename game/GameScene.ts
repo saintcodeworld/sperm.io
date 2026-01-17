@@ -1,6 +1,6 @@
 
 import Phaser from 'phaser';
-import { ServerSim, DeathEvent, KillEvent } from '../services/ServerSim';
+import { ServerSim, DeathEvent, KillEvent, CashoutFailedEvent } from '../services/ServerSim';
 import { GameState, ARENA_SIZE, PlayerData } from '../types';
 import { Sperm } from './Sperm';
 import { wsClient } from '../services/WebSocketClient'; // Import WebSocket client for network players
@@ -38,6 +38,7 @@ export default class GameScene extends Phaser.Scene {
   private readonly INTERPOLATION_STEP = 1/144; // For 144hz rendering
   private lastPositionSentTime: number = 0; // For throttling position updates
   private fpsText!: Phaser.GameObjects.Text; // FPS counter display
+  private cashoutStartTime?: number; // Track when cashout started for progress calculation
   
   constructor() {
     super('GameScene');
@@ -86,18 +87,50 @@ export default class GameScene extends Phaser.Scene {
         if (event.id === this.myId) this.triggerDeathSequence(event); 
       }));
       
-      // Listen for cashout success events from ServerSim
-      this.signalCleanups.push(this.server.onUpdate((state: GameState) => {
-        // Check if this player has cashed out (removed from players but was in cashout state)
-        if (this.myId && !state.players[this.myId] && this.isCashingOut) {
-          // Player has successfully cashed out
-          this.events.emit('cashout-success', {
-            totalPot: this.lastSolValue || 0,
-            signature: 'processed'
-          });
-          this.isCashingOut = false;
-        }
-      }));
+      // Listen for cashout success events from ServerSim via proper callback
+      console.log(`[GameScene] Checking if onCashoutSuccess exists: ${!!this.server.onCashoutSuccess}`);
+      if (this.server.onCashoutSuccess) {
+        console.log(`[GameScene] Registering onCashoutSuccess callback...`);
+        this.signalCleanups.push(this.server.onCashoutSuccess((event) => {
+          console.log(`[GameScene] ========== CASHOUT SUCCESS CALLBACK FIRED ==========`);
+          console.log(`[GameScene] Event playerId: ${event.playerId}, myId: ${this.myId}`);
+          if (event.playerId === this.myId) {
+            console.log(`[GameScene] Cashout success received: ${event.totalPot} SOL, player receives: ${event.playerReceives} SOL`);
+            // Emit to App.tsx to show success popup
+            this.events.emit('cashout-success', {
+              totalPot: event.totalPot,
+              playerReceives: event.playerReceives,
+              signature: event.signature
+            });
+            // Trigger exit sequence (similar to death but for cashout)
+            this.triggerCashoutExit(event);
+          }
+        }));
+      }
+
+      // DEBUG LOG: Listen for cashout failed events to reset player state
+      if (this.server.onCashoutFailed) {
+        this.signalCleanups.push(this.server.onCashoutFailed((event: CashoutFailedEvent) => {
+          if (event.playerId === this.myId) {
+            console.log(`[GameScene] Cashout FAILED: ${event.error}`);
+            // Reset cashing out state so player can move again
+            this.isCashingOut = false;
+            // Emit to App.tsx to show error notification
+            this.events.emit('cashout-failed', {
+              error: event.error,
+              shouldResetPlayer: event.shouldResetPlayer
+            });
+            // Reset cashout progress bar
+            this.events.emit('cashout-progress', 0);
+            // Show floating error text
+            const playerSperm = this.players.get(this.myId);
+            if (playerSperm) {
+              const head = playerSperm.getHead();
+              this.showFloatingText(head.x, head.y, `Cashout Failed!`);
+            }
+          }
+        }));
+      }
 
       this.signalCleanups.push(this.server.onKill((event: KillEvent) => {
         if (event.killerId === this.myId) {
@@ -221,12 +254,46 @@ export default class GameScene extends Phaser.Scene {
       this.handlePlayerDisconnected(data);
     });
     this.signalCleanups.push(playerDisconnectedCleanup);
+    
+    // DEBUG LOG: Listen for cashout success from multiplayer server
+    const cashoutSuccessCleanup = wsClient.onCashoutSuccess((data) => {
+      console.log(`[GameScene] Received cashout-success from WebSocket:`, data);
+      if (data.playerId === this.myId) {
+        console.log(`[GameScene] Cashout success for my player! Triggering exit...`);
+        this.events.emit('cashout-success', {
+          totalPot: data.totalPot,
+          playerReceives: data.playerReceives,
+          signature: data.signature
+        });
+        this.triggerCashoutExit(data);
+      }
+    });
+    this.signalCleanups.push(cashoutSuccessCleanup);
+    
+    // DEBUG LOG: Listen for cashout failed from multiplayer server
+    const cashoutFailedCleanup = wsClient.onCashoutFailed((data) => {
+      console.log(`[GameScene] Received cashout-failed from WebSocket:`, data);
+      if (data.playerId === this.myId) {
+        console.log(`[GameScene] Cashout FAILED for my player: ${data.error}`);
+        this.isCashingOut = false;
+        this.events.emit('cashout-failed', {
+          error: data.error,
+          shouldResetPlayer: data.shouldResetPlayer
+        });
+        this.events.emit('cashout-progress', 0);
+        const playerSperm = this.players.get(this.myId);
+        if (playerSperm) {
+          const head = playerSperm.getHead();
+          this.showFloatingText(head.x, head.y, `Cashout Failed!`);
+        }
+      }
+    });
+    this.signalCleanups.push(cashoutFailedCleanup);
   }
   
   // Create or update a network player based on received data
   private createOrUpdateNetworkPlayer(playerData: any) {
     if (!playerData.id) {
-      return;
       return;
     }
     
@@ -320,7 +387,6 @@ export default class GameScene extends Phaser.Scene {
   private handlePlayerMoved(data: any) {
     if (!data || !data.playerId) {
       return;
-      return;
     }
     
     // Add to state buffer instead of direct update
@@ -374,7 +440,6 @@ export default class GameScene extends Phaser.Scene {
   private handlePlayerPosition(data: any) {
     if (!data || !data.playerId) {
       return;
-      return;
     }
     
     this.createOrUpdateNetworkPlayer({
@@ -394,7 +459,7 @@ export default class GameScene extends Phaser.Scene {
       this.otherPlayers.get(playerId)?.destroy();
       this.otherPlayers.delete(playerId);
       this.networkUpdateTime.delete(playerId);
-      this.targetPositions.delete(playerId);
+      this.stateBuffer.delete(playerId);
     }
   }
 
@@ -437,6 +502,39 @@ export default class GameScene extends Phaser.Scene {
     this.events.emit('game-over', event);
   }
 
+  private triggerCashoutExit(event: { playerId: string; totalPot: number; playerReceives: number; signature: string }) {
+    if (this.isDead) return; // Prevent multiple triggers
+    
+    this.isDead = true;
+    console.log(`[GameScene] Triggering cashout exit for player ${event.playerId}`);
+    
+    // Pause physics and disconnect
+    if (this.physics) this.physics.pause();
+    wsClient.disconnect();
+    
+    // Visual effects - green flash for success (not red like death)
+    this.cameras.main.flash(300, 0, 255, 100);
+    
+    // Clean up ALL input listeners
+    this.input.keyboard?.off('keydown-SHIFT');
+    this.input.keyboard?.off('keyup-SHIFT');
+    this.input.keyboard?.off('keydown-SPACE');
+    this.input.keyboard?.off('keyup-SPACE');
+    this.input.off('pointerdown');
+    this.input.off('pointerup');
+    
+    // Stop player movement
+    this.isBoosting = false;
+    this.isCashingOut = false;
+    
+    // Show floating text for winnings
+    const playerSperm = this.players.get(this.myId);
+    if (playerSperm) {
+      const head = playerSperm.getHead();
+      this.showFloatingText(head.x, head.y, `CASHED OUT: ${event.playerReceives.toFixed(4)} SOL`);
+    }
+  }
+
   update() {
     const playerSperm = this.players.get(this.myId);
     if (playerSperm && !this.isDead) {
@@ -476,16 +574,65 @@ export default class GameScene extends Phaser.Scene {
         }
       }
       
-      // Clamp position to arena bounds
-      head.x = Phaser.Math.Clamp(head.x, 0, ARENA_SIZE);
-      head.y = Phaser.Math.Clamp(head.y, 0, ARENA_SIZE);
+      // CLIENT-SIDE BOUNDARY DEATH - immediate death when touching red line
+      const BOUNDARY_DEATH_MARGIN = 10;
+      if (head.x <= BOUNDARY_DEATH_MARGIN || head.x >= ARENA_SIZE - BOUNDARY_DEATH_MARGIN || 
+          head.y <= BOUNDARY_DEATH_MARGIN || head.y >= ARENA_SIZE - BOUNDARY_DEATH_MARGIN) {
+        // Trigger death immediately on client (triggerDeathSequence sets isDead internally)
+        const serverData = this.server?.getPlayerData(this.myId);
+        const deathEvent: DeathEvent = {
+          id: this.myId,
+          score: serverData?.score || 0,
+          length: serverData?.length || 30,
+          reason: 'BOUNDARY',
+          killedBy: 'The Arena',
+          solLost: this.lastSolValue || 0,
+          timeAlive: this.server?.getTimeAlive(this.myId) || 0
+        };
+        this.triggerDeathSequence(deathEvent);
+        return; // Stop processing
+      }
+      
+      // Update tail segments to follow the head
+      playerSperm.updateLocalSegments();
       
       // Send input to server in background
       if (this.server && !this.isDead) {
-        this.server.input(this.myId, angle, this.isBoosting, this.isCashingOut);
+        // DEBUG LOG: Track cashout input
+        if (this.isCashingOut) {
+          console.log(`[GameScene] Sending cashout input: isCashingOut=${this.isCashingOut}, isBoosting=${this.isBoosting}`);
+        }
         
-        const progress = this.server.getCashoutProgress(this.myId);
-        this.events.emit('cashout-progress', progress > 0 ? progress : 0);
+        // Check if we're in multiplayer mode by checking if WebSocket is connected
+        if (wsClient.isConnected()) {
+          // Multiplayer: Send via WebSocket
+          console.log(`[GameScene] Sending input via WebSocket (multiplayer)`);
+          wsClient.sendInput(this.myId, angle, this.isBoosting, this.isCashingOut);
+          
+          // For cashout progress in multiplayer, we need to track it differently
+          // For now, emit a simple progress based on time held
+          if (this.isCashingOut) {
+            if (!this.cashoutStartTime) {
+              this.cashoutStartTime = Date.now();
+              console.log(`[GameScene] Cashout started, tracking progress from ${this.cashoutStartTime}`);
+            }
+            const progress = Math.min(1, (Date.now() - this.cashoutStartTime) / 3000);
+            this.events.emit('cashout-progress', progress);
+          } else {
+            if (this.cashoutStartTime) {
+              console.log(`[GameScene] Cashout cancelled, resetting progress`);
+              this.cashoutStartTime = undefined;
+            }
+            this.events.emit('cashout-progress', 0);
+          }
+        } else {
+          // Single-player: Use local server
+          console.log(`[GameScene] Sending input to local server (single-player)`);
+          this.server.input(this.myId, angle, this.isBoosting, this.isCashingOut);
+          
+          const progress = this.server.getCashoutProgress(this.myId);
+          this.events.emit('cashout-progress', progress > 0 ? progress : 0);
+        }
         
         // Update server position from authoritative source
         const serverState = this.server.getPlayerData(this.myId);
@@ -557,18 +704,23 @@ export default class GameScene extends Phaser.Scene {
 
   private handleStateUpdate(state: GameState) {
     Object.entries(state.players).forEach(([id, pData]) => {
-      // Skip local player position updates from server
+      // Handle local player
       if (id === this.myId) {
-        // Only update non-position data for local player
-        const localPlayer = this.players.get(id);
-        if (localPlayer) {
-          this.lastSolValue = pData.solValue;
-          // Update score and other non-position properties
-          localPlayer.updateNonPosition(pData);
+        let localPlayer = this.players.get(id);
+        // Create local player sprite if it doesn't exist yet
+        if (!localPlayer) {
+          localPlayer = new Sperm(this, pData);
+          this.players.set(id, localPlayer);
+          // Set camera to follow the local player
+          this.cameras.main.startFollow(localPlayer.getHead(), true, 0.1, 0.1);
         }
+        this.lastSolValue = pData.solValue;
+        // Update score and other non-position properties (not position - that's client controlled)
+        localPlayer.updateNonPosition(pData);
         return;
       }
 
+      // Handle other players
       let sperm = this.players.get(id);
       if (!sperm) {
         sperm = new Sperm(this, pData);
@@ -579,6 +731,11 @@ export default class GameScene extends Phaser.Scene {
 
     this.players.forEach((_, id) => {
       if (!state.players[id]) {
+        // DEBUG LOG: Don't destroy local player via state update - let proper exit sequence handle it
+        if (id === this.myId) {
+          console.log(`[GameScene] Player ${id} removed from server state but NOT destroying sprite (waiting for proper exit)`);
+          return; // Don't destroy local player - cashout/death callbacks will handle this
+        }
         this.players.get(id)?.destroy();
         this.players.delete(id);
       }
@@ -586,28 +743,62 @@ export default class GameScene extends Phaser.Scene {
 
     Object.entries(state.food).forEach(([id, fData]) => {
       if (!this.foods.has(id)) {
-        const radius = fData.value > 1 ? 8 : 6;
+        const radius = fData.value > 1 ? 10 : 7;
         const food = this.add.arc(fData.x, fData.y, radius, 0, 360, false, fData.color);
+        food.setAlpha(0.95);
         
         if (fData.value > 1) {
-          food.setStrokeStyle(2, 0xffffff, 0.8); // Brighter stroke for lucky food
+          food.setStrokeStyle(2, 0xffffff, 0.9);
         } else {
-          food.setStrokeStyle(1, 0xffffff, 0.3);
+          food.setStrokeStyle(1, 0xffffff, 0.5);
         }
         
+        food.setDepth(2);
         this.foods.set(id, food);
       } else {
-        // Update position for magnet effect
+        // Smooth position update for magnet eating effect
         const food = this.foods.get(id);
         if (food) {
-          food.setPosition(fData.x, fData.y);
+          // Fast lerp for responsive magnet movement towards sperm head
+          food.x = Phaser.Math.Linear(food.x, fData.x, 0.5);
+          food.y = Phaser.Math.Linear(food.y, fData.y, 0.5);
         }
       }
     });
 
     this.foods.forEach((obj, id) => {
       if (!state.food[id]) {
-        obj.destroy();
+        // Get player position for eating animation target
+        const myPlayer = this.players.get(this.myId);
+        if (myPlayer) {
+          const head = myPlayer.getHead();
+          // Animate food flying into the sperm's mouth
+          this.tweens.add({
+            targets: obj,
+            x: head.x,
+            y: head.y,
+            scaleX: 0,
+            scaleY: 0,
+            alpha: 0,
+            duration: 120,
+            ease: 'Quad.easeIn',
+            onComplete: () => {
+              obj.destroy();
+            }
+          });
+        } else {
+          // Fallback - just shrink
+          this.tweens.add({
+            targets: obj,
+            scaleX: 0,
+            scaleY: 0,
+            alpha: 0,
+            duration: 100,
+            onComplete: () => {
+              obj.destroy();
+            }
+          });
+        }
         this.foods.delete(id);
       }
     });

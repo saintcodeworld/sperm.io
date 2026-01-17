@@ -6,10 +6,12 @@ class RoomManager {
   private rooms: Map<string, Room> = new Map();
   private gameServerUrl: string | undefined;
   private connected: boolean = false;
+  // Cache single-player server instances to reuse across calls
+  private singlePlayerServers: Map<string, ServerSim> = new Map();
 
   constructor() {
     // Always use fallback URL if environment variable is missing
-    this.gameServerUrl = import.meta.env.VITE_GAME_SERVER_URL || 'https://compassionate-illumination-production-6200.up.railway.app';
+    this.gameServerUrl = import.meta.env.VITE_GAME_SERVER_URL || 'http://localhost:3002';
     this.initializeRooms();
   }
 
@@ -27,10 +29,18 @@ class RoomManager {
   }
 
   async connectToGameServer(): Promise<boolean> {
-    console.log('[App] Attempting to connect to Multiplayer before starting game...');
+    console.log('[RoomManager] Attempting to connect to Multiplayer server...');
+    
+    // First disconnect any existing connection to ensure clean state
+    if (wsClient.isConnected()) {
+      console.log('[RoomManager] Disconnecting existing WebSocket connection...');
+      wsClient.disconnect();
+      this.connected = false;
+      // Small delay to ensure clean disconnect
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
     
     try {
-      // Always attempt to connect - we've ensured gameServerUrl has fallback value
       await wsClient.connect(this.gameServerUrl);
       this.connected = true;
       console.log('🎮 Successfully connected to multiplayer game server');
@@ -43,20 +53,23 @@ class RoomManager {
     }
   }
 
-  public async joinRoom(roomId: string, playerId: string, playerName: string): Promise<boolean> {
+  public async joinRoom(roomId: string, playerId: string, playerName: string, solAddress?: string): Promise<boolean> {
     const room = this.rooms.get(roomId);
     if (!room) {
       console.error(`Room ${roomId} not found`);
       return false;
     }
 
-    // If not connected to multiplayer server, fall back to single-player mode
-    if (!this.connected) {
-      // Try to reconnect one more time in case the initial connection failed
+    // Always check actual connection status (not cached) and try to reconnect if needed
+    const actuallyConnected = wsClient.isConnected();
+    if (!actuallyConnected) {
+      console.log('[RoomManager] WebSocket not connected, attempting to connect...');
+      this.connected = false;
+      
       try {
         await this.connectToGameServer();
       } catch (error) {
-        // Silently ignore - we'll fall back to single player
+        console.log('[RoomManager] Connection attempt failed');
       }
       
       // If still not connected, use single player mode
@@ -67,12 +80,13 @@ class RoomManager {
     }
 
     try {
-      await wsClient.joinRoom(roomId, playerId, playerName, room.entryFee);
+      await wsClient.joinRoom(roomId, playerId, playerName, room.entryFee, solAddress);
       room.currentPlayers++;
       console.log(`✅ ${playerName} joined room ${roomId}`);
       return true;
     } catch (error) {
       console.error('Failed to join multiplayer room, falling back to single-player:', error);
+      this.connected = false; // Reset connection flag on join failure
       return true; // Fall back to single-player mode
     }
   }
@@ -84,10 +98,16 @@ class RoomManager {
     
     // If not connected to multiplayer, return single-player server simulation
     if (!this.connected) {
-      console.log(`🎮 Using single-player server simulation for room ${roomId} (entry: ${entryFee} SOL)`);
-      const singlePlayerServer = new ServerSim();
+      // Check if we already have a cached server for this room
+      let singlePlayerServer = this.singlePlayerServers.get(roomId);
+      if (!singlePlayerServer) {
+        console.log(`🎮 Creating new single-player server for room ${roomId} (entry: ${entryFee} SOL)`);
+        singlePlayerServer = new ServerSim();
+        this.singlePlayerServers.set(roomId, singlePlayerServer);
+      } else {
+        console.log(`🎮 Reusing existing single-player server for room ${roomId}`);
+      }
       
-      // Server will be joined by App.tsx after game starts - don't auto-join here
       return singlePlayerServer;
     }
     
@@ -140,6 +160,12 @@ class RoomManager {
         if (!cashoutStartTime) return 0;
         const elapsed = Date.now() - cashoutStartTime;
         return Math.min(1, elapsed / 3000);
+      },
+      onCashoutSuccess: (callback: (event: any) => void) => {
+        // For multiplayer mode, cashout is handled server-side
+        // Single-player mode uses ServerSim which has this callback
+        // Return no-op cleanup function for multiplayer
+        return () => {};
       }
     };
   }
@@ -156,7 +182,26 @@ class RoomManager {
     return Array.from(this.rooms.values());
   }
 
+  // Clear cached single-player server for a room (call after game ends)
+  public clearServer(roomId: string): void {
+    if (this.singlePlayerServers.has(roomId)) {
+      console.log(`[RoomManager] Clearing cached server for room ${roomId}`);
+      this.singlePlayerServers.delete(roomId);
+    }
+  }
+
+  // Clear all cached servers (call on cleanup)
+  public clearAllServers(): void {
+    console.log('[RoomManager] Clearing all cached servers');
+    this.singlePlayerServers.clear();
+  }
+
   public isConnected(): boolean {
+    // Check actual WebSocket status, not just cached flag
+    const actuallyConnected = wsClient.isConnected();
+    if (this.connected !== actuallyConnected) {
+      this.connected = actuallyConnected;
+    }
     return this.connected;
   }
 

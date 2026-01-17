@@ -152,27 +152,57 @@ const App: React.FC = () => {
         console.log('[App] 🎮 Running in MULTIPLAYER mode - you will see other players!');
       }
 
+      // ALWAYS process entry fee transaction first (before joining game)
+      // This ensures funds go to game wallet and treasury in both modes
+      if (entryFee > 0) {
+        console.log(`[App] Processing entry fee transaction: ${entryFee} SOL`);
+        const txResult = await gameTransactionService.processEntryFee(
+          currentUser.solAddress,
+          entryFee
+        );
+        
+        if (!txResult.success) {
+          console.error(`[App] Entry fee transaction failed: ${txResult.error}`);
+          setError(`Transaction failed: ${txResult.error}`);
+          setIsTransactionLoading(false);
+          return;
+        }
+        
+        console.log(`[App] Entry fee transaction confirmed: ${txResult.signature}`);
+        setTransactionSignature(txResult.signature || '');
+        
+        // Deduct balance from user's account in database
+        await authService.deductBalance(entryFee);
+        console.log(`[App] Balance deducted: ${entryFee} SOL`);
+      }
+
       // Join the room via WebSocket (for multiplayer) or locally (for single-player)
-      const joined = await roomManager.joinRoom(roomId, id, currentUser.username);
+      const joined = await roomManager.joinRoom(roomId, id, currentUser.username, currentUser.solAddress);
       if (!joined) {
         setError('Failed to join room');
         setIsTransactionLoading(false);
         return;
       }
 
-      // For single-player mode, we need to join the local ServerSim
-      // For multiplayer mode, roomManager.joinRoom already handled the server-side join
+      // For single-player mode, we need to join the local ServerSim (without re-processing transaction)
       if (!isMultiplayer) {
-        // Join the local ServerSim with entry fee (handles blockchain transaction for single-player)
-        const joinSuccess = await roomServer.join(id, currentUser.username, entryFee);
+        // Create player in local ServerSim (transaction already processed above)
+        const joinSuccess = await roomServer.join(id, currentUser.username, 0); // Pass 0 to skip transaction
         if (!joinSuccess) {
-          setError('Failed to join game - transaction may have failed');
+          setError('Failed to join game');
           setIsTransactionLoading(false);
           return;
         }
-        console.log(`[App] Player ${id} joined LOCAL server with ${entryFee} SOL entry fee`);
+        // Update the player's solValue to the actual entry fee AND solAddress
+        const playerData = roomServer.getPlayerData(id);
+        if (playerData) {
+          playerData.solValue = entryFee;
+          playerData.solAddress = currentUser.solAddress; // DEBUG LOG: Critical fix - set solAddress for cashout
+          console.log(`[App] Updated player data: solValue=${entryFee}, solAddress=${currentUser.solAddress}`);
+        }
+        console.log(`[App] Player ${id} joined LOCAL server with ${entryFee} SOL`);
       } else {
-        console.log(`[App] Player ${id} joined MULTIPLAYER server with ${entryFee} SOL entry fee`);
+        console.log(`[App] Player ${id} joined MULTIPLAYER server with ${entryFee} SOL`);
       }
 
       // Wait a moment for the transaction to process, then start the game
@@ -238,22 +268,31 @@ const App: React.FC = () => {
               cleanupGame();
             });
 
-            // Handle cashout success event from ServerSim
-            gameScene?.events.on('cashout-success', async (data: CashoutEvent) => {
+            // DEBUG LOG: Handle cashout failed event - reset player state and show error
+            gameScene?.events.on('cashout-failed', async (data: any) => {
+              console.log('[App] Received cashout-failed event:', data);
+              setError(`Cashout failed: ${data.error}. You can continue playing or try again.`);
+              // Clear error after 5 seconds
+              setTimeout(() => setError(''), 5000);
+            });
+
+            // Handle cashout success event from GameScene (triggered by ServerSim callback)
+            gameScene?.events.on('cashout-success', async (data: any) => {
+              console.log('[App] Received cashout-success event:', data);
+              
               // Show loading for cashout transaction
               setIsTransactionLoading(true);
-              setTransactionMessage('Processing cashout transaction...');
-              setTotalPotAmount(data.totalPot); // Track total pot for comparison
-              setTransactionSignature(data.signature); // Set the transaction signature
+              setTransactionMessage('Cashout successful! Processing...');
+              setTotalPotAmount(data.totalPot || 0);
+              setTransactionSignature(data.signature || '');
               
-              // Calculate the actual amount the user receives (total - platform fee - gas)
-              const winnings = data.totalPot * 0.99 - 0.00001; // 1% platform fee minus estimated gas
+              // Use playerReceives from ServerSim callback if available, otherwise calculate
+              const winnings = data.playerReceives || (data.totalPot * 0.99);
               
-              // Don't process transaction again - ServerSim already did it
-              // Just sync balance and show success
-              await syncUser(); // Sync to get updated balance from blockchain
+              // Sync balance from blockchain
+              await syncUser();
               setLastEarnings(winnings);
-              console.log(`[App] Cashout successful: Total pot ${data.totalPot} SOL, User received ${winnings} SOL`);
+              console.log(`[App] Cashout successful: Total pot ${data.totalPot} SOL, Player received ${winnings} SOL`);
               
               // Hide loading after cashout
               setTimeout(async () => {
@@ -305,11 +344,31 @@ const App: React.FC = () => {
     }
   };
 
-  const cleanupGame = () => {
+  const cleanupGame = async () => {
+    console.log('[App] Cleaning up game for potential rejoin...');
+    
+    // Destroy Phaser game instance
     if (gameRef.current) {
       gameRef.current.destroy(true);
       gameRef.current = null;
       setGameInstance(null);
+    }
+    
+    // Clear the game container div content
+    const gameContainer = document.getElementById('game-container');
+    if (gameContainer) {
+      gameContainer.innerHTML = '';
+    }
+    
+    // Clear cached single-player servers so next game gets fresh instance
+    roomManager.clearAllServers();
+    
+    // Reconnect WebSocket for next game session
+    try {
+      await roomManager.connectToGameServer();
+      console.log('[App] WebSocket reconnected for next session');
+    } catch (err) {
+      console.log('[App] WebSocket reconnect failed, will retry on next join');
     }
   };
 

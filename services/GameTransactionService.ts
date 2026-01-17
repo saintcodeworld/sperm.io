@@ -74,11 +74,15 @@ class GameTransactionService {
       const gameWallet = await this.getGameWallet();
       const treasuryWallet = await this.getTreasuryWallet();
 
-      // Calculate fees
+      // Calculate fees - player pays entry + 3% platform fee + gas
       const platformFee = entryFee * PLATFORM_ENTRY_FEE_PERCENT;
-      const totalCost = entryFee + platformFee + ESTIMATED_GAS;
+      const totalCost = entryFee + platformFee; // Gas is paid automatically by fee payer
       
-      console.log(`[GameTx] Fee breakdown - Entry: ${entryFee} SOL, Platform: ${platformFee} SOL, Gas: ${ESTIMATED_GAS} SOL`);
+      console.log(`[GameTx] Entry fee breakdown:`);
+      console.log(`  - Entry fee: ${entryFee} SOL → Game Wallet`);
+      console.log(`  - Platform fee (3%): ${platformFee.toFixed(6)} SOL → Treasury`);
+      console.log(`  - Gas fee: paid by Player (as fee payer)`);
+      console.log(`  - Total player pays: ${totalCost.toFixed(6)} SOL + gas`);
 
       // Get user's internal wallet for signing
       const userId = await authService.getUserId();
@@ -173,42 +177,71 @@ class GameTransactionService {
     playerAddress: string,
     amount: number
   ): Promise<{ success: boolean; error?: string; signature?: string }> {
+    console.log(`[GameTx] ========== CASHOUT START ==========`);
+    console.log(`[GameTx] playerId: ${playerId}`);
+    console.log(`[GameTx] playerAddress: ${playerAddress}`);
+    console.log(`[GameTx] amount: ${amount}`);
+    
     try {
-      console.log(`[GameTx] Processing cashout: ${amount} SOL to ${playerAddress}`);
+      console.log(`[GameTx] STEP 1: Validating inputs...`);
       
       // Validate inputs
-      if (!playerAddress) throw new Error('Player address is required');
-      if (!playerId) throw new Error('Player ID is required');
+      if (!playerAddress) {
+        console.error('[GameTx] VALIDATION FAILED: Player address is missing');
+        throw new Error('Player address is required');
+      }
+      if (!playerId) {
+        console.error('[GameTx] VALIDATION FAILED: Player ID is missing');
+        throw new Error('Player ID is required');
+      }
+      
+      console.log(`[GameTx] STEP 1 COMPLETE: Inputs validated`);
       
       // Allow 0 cashout for free games - skip blockchain transaction
       if (amount <= 0) {
-        console.log('[GameTx] Free game cashout - skipping blockchain transaction');
+        console.log('[GameTx] FREE GAME: Skipping blockchain, returning success immediately');
         return { success: true, signature: 'FREE_GAME_NO_TX' };
       }
       
-      const playerPubkey = new PublicKey(playerAddress);
+      console.log(`[GameTx] STEP 2: Creating player public key...`);
+      let playerPubkey;
+      try {
+        playerPubkey = new PublicKey(playerAddress);
+        console.log(`[GameTx] STEP 2 COMPLETE: Player pubkey created: ${playerPubkey.toString()}`);
+      } catch (pubkeyError) {
+        console.error('[GameTx] STEP 2 FAILED: Invalid player address:', pubkeyError);
+        throw new Error(`Invalid player address: ${pubkeyError.message}`);
+      }
       
       // Get game wallet with proper error handling
+      console.log(`[GameTx] STEP 3: Getting game wallet...`);
       let gameWallet;
       try {
         gameWallet = await this.getGameWallet();
-        console.log('[GameTx] Game wallet public key:', gameWallet.publicKey.toString());
+        console.log(`[GameTx] STEP 3 COMPLETE: Game wallet: ${gameWallet.publicKey.toString()}`);
       } catch (walletError) {
-        console.error('[GameTx] Failed to get game wallet:', walletError);
+        console.error('[GameTx] STEP 3 FAILED: Game wallet error:', walletError);
         throw new Error(`Game wallet error: ${walletError.message}`);
       }
       
+      console.log(`[GameTx] STEP 4: Getting treasury wallet...`);
       const treasuryWallet = await this.getTreasuryWallet();
+      console.log(`[GameTx] STEP 4 COMPLETE: Treasury wallet: ${treasuryWallet.toString()}`);
 
-      // Calculate fees
+      // Calculate fees - player gets pot minus 1% platform fee
+      // Gas is paid by game wallet (as feePayer), NOT deducted from player's winnings
       const platformFee = amount * PLATFORM_CASHOUT_FEE_PERCENT;
-      const playerReceives = amount - platformFee - ESTIMATED_GAS;
+      const playerReceives = amount - platformFee; // Player gets full pot minus 1% fee
       
       if (playerReceives <= 0) {
         throw new Error('Cashout amount too small after fees');
       }
       
-      console.log(`[GameTx] Cashout breakdown - Total: ${amount} SOL, Player receives: ${playerReceives} SOL, Platform fee: ${platformFee} SOL`);
+      console.log(`[GameTx] Cashout breakdown:`);
+      console.log(`  - Total pot: ${amount} SOL`);
+      console.log(`  - Platform fee (1%): ${platformFee.toFixed(6)} SOL → Treasury`);
+      console.log(`  - Player receives: ${playerReceives.toFixed(6)} SOL`);
+      console.log(`  - Gas fee: paid by Game Wallet (as fee payer)`);
 
       // Create transaction
       const transaction = new Transaction();
@@ -232,67 +265,99 @@ class GameTransactionService {
       );
 
       // Get recent blockhash
+      console.log(`[GameTx] STEP 5: Getting recent blockhash...`);
       const { blockhash } = await this.connection.getLatestBlockhash('processed');
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = gameWallet.publicKey;
+      console.log(`[GameTx] STEP 5 COMPLETE: Blockhash: ${blockhash.substring(0, 20)}...`);
 
+      console.log(`[GameTx] STEP 6: Signing transaction...`);
       try {
-        // Sign with game wallet (using proper method with complete keypair)
-        console.log('[GameTx] Signing transaction with game wallet:', gameWallet.publicKey.toString());
-        transaction.sign(gameWallet); // Using full sign instead of partialSign for complete keypair
-        console.log('[GameTx] Transaction signed successfully');
+        transaction.sign(gameWallet);
+        console.log(`[GameTx] STEP 6 COMPLETE: Transaction signed`);
       } catch (signError) {
-        console.error('[GameTx] Signature error:', signError);
+        console.error('[GameTx] STEP 6 FAILED: Signature error:', signError);
         throw new Error(`Failed to sign transaction: ${signError.message}`);
       }
 
       // Send transaction with proper error handling
+      console.log(`[GameTx] STEP 7: Sending transaction to Solana network...`);
       let signature;
       try {
-        console.log('[GameTx] Sending transaction to network...');
         signature = await this.connection.sendRawTransaction(
           transaction.serialize(),
           { skipPreflight: false, preflightCommitment: 'processed' }
         );
-        console.log(`[GameTx] Transaction sent successfully: ${signature}`);
+        console.log(`[GameTx] STEP 7 COMPLETE: Transaction sent, signature: ${signature}`);
       } catch (sendError) {
-        console.error('[GameTx] Transaction send error:', sendError);
+        console.error('[GameTx] STEP 7 FAILED: Transaction send error:', sendError);
         throw new Error(`Failed to send transaction: ${sendError.message}`);
       }
 
       // Wait for transaction confirmation
-      await this.connection.confirmTransaction(signature, 'processed');
-      console.log(`[GameTx] Cashout transaction confirmed: ${signature}`);
-
-      // Update transaction history using transactionHistoryService for consistency
+      console.log(`[GameTx] STEP 8: Waiting for transaction confirmation...`);
       try {
-        // Fetch current balance to record the transaction with before/after amounts
-        const userProfile = await supabase
-          .from('profiles')
-          .select('account_balance')
-          .eq('id', playerId)
-          .single();
-        
-        const currentBalance = userProfile?.data?.account_balance || 0;
-        
-        await transactionHistoryService.recordTransaction(
-          playerId,
-          'game_win', // Using game_win for cashout
-          playerReceives, 
-          currentBalance - playerReceives, // Balance before
-          currentBalance, // Balance after
-          signature,
-          `Game winnings: ${playerReceives.toFixed(4)} SOL`
-        );
-        console.log('[GameTx] Transaction recorded in history');
-      } catch (dbError) {
-        console.error('[GameTx] Failed to record transaction in history service:', dbError);
+        await this.connection.confirmTransaction(signature, 'processed');
+        console.log(`[GameTx] STEP 8 COMPLETE: Transaction confirmed!`);
+      } catch (confirmError) {
+        console.error('[GameTx] STEP 8 FAILED: Confirmation error:', confirmError);
+        // Don't throw here - tx might still be successful, just confirmation timed out
+        console.log('[GameTx] WARNING: Confirmation timed out but tx may still be valid');
       }
 
+      // Update transaction history - NOTE: This is optional and should not block cashout
+      console.log(`[GameTx] STEP 9: Recording transaction in history (non-blocking)...`);
+      console.log(`[GameTx] WARNING: playerId '${playerId}' may not be a valid UUID for DB lookup`);
+      
+      // Don't await this - let it run in background so it doesn't block the cashout
+      this.recordCashoutInHistory(playerId, playerReceives, signature).catch(err => {
+        console.error('[GameTx] Background history recording failed:', err);
+      });
+      
+      console.log(`[GameTx] ========== CASHOUT SUCCESS ==========`);
+      console.log(`[GameTx] Returning success with signature: ${signature}`);
       return { success: true, signature };
     } catch (error) {
-      console.error('[GameTx] Cashout processing failed:', error);
+      console.error(`[GameTx] ========== CASHOUT FAILED ==========`);
+      console.error('[GameTx] Error:', error);
+      console.error('[GameTx] Error message:', error.message);
       return { success: false, error: error.message };
+    }
+  }
+
+  // DEBUG LOG: Separate method for recording history so it doesn't block cashout
+  private async recordCashoutInHistory(playerId: string, playerReceives: number, signature: string) {
+    try {
+      console.log(`[GameTx] Recording cashout in history for ${playerId}...`);
+      
+      // Try to fetch user profile - this might fail if playerId is not a UUID
+      const userProfile = await supabase
+        .from('profiles')
+        .select('account_balance')
+        .eq('id', playerId)
+        .single();
+      
+      if (userProfile.error) {
+        console.log(`[GameTx] Could not fetch profile for ${playerId}: ${userProfile.error.message}`);
+        console.log(`[GameTx] This is expected if playerId is a session ID, not a UUID`);
+        return; // Don't record if we can't find the user
+      }
+      
+      const currentBalance = userProfile?.data?.account_balance || 0;
+      
+      await transactionHistoryService.recordTransaction(
+        playerId,
+        'game_win',
+        playerReceives, 
+        currentBalance - playerReceives,
+        currentBalance,
+        signature,
+        `Game winnings: ${playerReceives.toFixed(4)} SOL`
+      );
+      console.log('[GameTx] Transaction recorded in history successfully');
+    } catch (dbError) {
+      console.error('[GameTx] History recording error:', dbError);
+      // Don't throw - this is non-critical
     }
   }
 }

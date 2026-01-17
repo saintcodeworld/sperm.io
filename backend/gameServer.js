@@ -10,17 +10,17 @@ import { ROOM_CONFIGS } from './types.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Load environment variables - Railway sets PORT automatically
+// Load environment variables - VPS sets PORT automatically
 dotenv.config({ path: join(__dirname, '..', '.env.local') });
 
-// Debug: Log environment for Railway deployment
+// Debug: Log environment for VPS deployment
 console.log('[GameServer] Environment:', process.env.NODE_ENV || 'development');
 console.log('[GameServer] PORT from env:', process.env.PORT);
 
 // Create Express app
 const app = express();
 
-// Health check endpoint for Railway
+// Health check endpoint for VPS monitoring
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Game server is running' });
 });
@@ -41,7 +41,7 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 
 console.log('[GameServer] CORS allowed origins:', ALLOWED_ORIGINS);
 
-// Set up Socket.io with Railway-compatible configuration
+// Set up Socket.io with VPS-compatible configuration
 const io = new Server(httpServer, {
   cors: {
     origin: ALLOWED_ORIGINS.includes('*') ? '*' : ALLOWED_ORIGINS,
@@ -122,18 +122,31 @@ class MultiplayerGameServer {
 
   handleConnection(socket) {
     console.log(`👤 Player connected: ${socket.id}`);
+    console.log(`👤 Socket connected from: ${socket.handshake.address}`);
+    
+    // Log ALL events for debugging
+    socket.onAny((eventName, ...args) => {
+      if (eventName === 'player-input') {
+        console.log(`[GameServer] RECEIVED EVENT: ${eventName}`, args[0]);
+      } else if (Math.random() < 0.01) { // Only log 1% of other events to avoid spam
+        console.log(`[GameServer] RECEIVED EVENT: ${eventName}`, args);
+      }
+    });
 
     socket.on('join-room', async (data) => {
-      const { roomId, playerId, playerName, entryFee } = data;
+      console.log(`[GameServer] Socket ${socket.id} attempting to join room`);
+      const { roomId, playerId, playerName, entryFee, solAddress } = data;
+      console.log(`[GameServer] Join data: roomId=${roomId}, playerId=${playerId}, playerName=${playerName}, solAddress=${solAddress}`);
       const room = this.rooms.get(roomId);
       
       if (!room) {
+        console.error(`[GameServer] Room ${roomId} not found! Available rooms:`, Array.from(this.rooms.keys()));
         socket.emit('join-error', { message: 'Room not found' });
         return;
       }
 
       try {
-        const success = await room.server.join(playerId, playerName, entryFee);
+        const success = await room.server.join(playerId, playerName, entryFee, solAddress);
         if (success) {
           room.players.add(socket.id);
           this.playerRooms.set(socket.id, roomId);
@@ -197,6 +210,47 @@ class MultiplayerGameServer {
           
           console.log(`[JOIN] Sent ${currentPlayers.length} current players to new player ${playerId}`);
           
+          // DEBUG LOG: Wire up cashout callbacks to emit WebSocket events
+          // Listen for cashout success from this room's ServerSim
+          room.server.onCashoutSuccess((event) => {
+            console.log(`[GameServer] Cashout success for player ${event.playerId}, emitting to socket...`);
+            // Find the socket for this player
+            const playerSocketId = Array.from(this.playerSockets.entries())
+              .find(([_, pId]) => pId === event.playerId)?.[0];
+            
+            if (playerSocketId) {
+              const playerSocket = this.io.sockets.sockets.get(playerSocketId);
+              if (playerSocket) {
+                console.log(`[GameServer] Emitting cashout-success to socket ${playerSocketId}`);
+                playerSocket.emit('cashout-success', {
+                  playerId: event.playerId,
+                  totalPot: event.totalPot,
+                  playerReceives: event.playerReceives,
+                  signature: event.signature
+                });
+              }
+            }
+          });
+          
+          // Listen for cashout failure
+          room.server.onCashoutFailed((event) => {
+            console.log(`[GameServer] Cashout failed for player ${event.playerId}, emitting to socket...`);
+            const playerSocketId = Array.from(this.playerSockets.entries())
+              .find(([_, pId]) => pId === event.playerId)?.[0];
+            
+            if (playerSocketId) {
+              const playerSocket = this.io.sockets.sockets.get(playerSocketId);
+              if (playerSocket) {
+                console.log(`[GameServer] Emitting cashout-failed to socket ${playerSocketId}`);
+                playerSocket.emit('cashout-failed', {
+                  playerId: event.playerId,
+                  error: event.error,
+                  shouldResetPlayer: event.shouldResetPlayer
+                });
+              }
+            }
+          });
+          
           // Start sending game state updates
           this.startGameStateUpdates(socket, room);
           
@@ -218,6 +272,16 @@ class MultiplayerGameServer {
       if (!room) return;
       
       const { playerId, angle, boost, cashout } = data;
+      
+      // DEBUG LOG: Track ALL input
+      if (Math.random() < 0.01) { // Only log 1% to avoid spam
+        console.log(`[GameServer] Player ${playerId} input: angle=${angle.toFixed(2)}, boost=${boost}, cashout=${cashout}`);
+      }
+      
+      // DEBUG LOG: Track cashout input specifically
+      if (cashout) {
+        console.log(`[GameServer] Player ${playerId} CASHOUT INPUT RECEIVED! cashout=${cashout}`);
+      }
       
       // Process input in game server
       room.server.input(playerId, angle, boost, cashout);
@@ -424,19 +488,19 @@ io.on('connection', (socket) => {
   gameServer.handleConnection(socket);
 });
 
-// Railway provides PORT via environment variable
+// VPS provides PORT via environment variable
 // Default to 3002 for local development
 const PORT = process.env.PORT || 3002;
-const HOST = '0.0.0.0'; // Bind to all network interfaces for Railway
+const HOST = '0.0.0.0'; // Bind to all network interfaces for VPS
 
 httpServer.listen(PORT, HOST, () => {
   console.log(`🎮 Multiplayer game server running on ${HOST}:${PORT}`);
   
-  // Railway deployment detection
-  if (process.env.RAILWAY_ENVIRONMENT) {
-    console.log(`🚂 Railway environment: ${process.env.RAILWAY_ENVIRONMENT}`);
-    console.log(`🌐 Railway URL: https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'your-app.up.railway.app'}`);
-    console.log(`🔒 WebSocket endpoint: wss://${process.env.RAILWAY_PUBLIC_DOMAIN || 'your-app.up.railway.app'}`);
+  // VPS deployment detection
+  if (process.env.NODE_ENV === 'production') {
+    console.log(`🚀 Production environment detected`);
+    console.log(`🌐 VPS URL: https://your-domain.com`);
+    console.log(`🔒 WebSocket endpoint: wss://your-domain.com`);
   } else {
     console.log(`🌐 Local WebSocket endpoint: ws://localhost:${PORT}`);
   }

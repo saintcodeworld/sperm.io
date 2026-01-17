@@ -9,6 +9,8 @@ export class ServerSim {
     this.callbacks = [];
     this.deathCallbacks = [];
     this.killCallbacks = [];
+    this.cashoutCallbacks = []; // DEBUG LOG: Cashout success callbacks
+    this.cashoutFailedCallbacks = []; // DEBUG LOG: Cashout failed callbacks
     this.lastUpdate = Date.now();
     this.playerJoinTime = new Map();
     this.cashoutStates = new Map();
@@ -99,7 +101,7 @@ export class ServerSim {
         score: 0,
         solValue: entryFee,
         segments,
-        solAddress: ''
+        solAddress: solAddress || ''
       };
       
       console.log(`[Server] Player ${id} joined successfully`);
@@ -111,26 +113,62 @@ export class ServerSim {
   }
 
   input(id, angle, boost, cashout) {
+    console.log(`[Server] input() called: id=${id}, angle=${angle.toFixed(2)}, boost=${boost}, cashout=${cashout}`);
     const player = this.state.players[id];
-    if (!player) return;
+    if (!player) {
+      console.log(`[Server] Player ${id} not found in state!`);
+      return;
+    }
 
     // Handle cashout request
     if (cashout && !this.cashoutStates.has(id)) {
+      console.log(`[Server] ========== CASHOUT INITIATED (MULTIPLAYER) ==========`);
       console.log(`[Server] Player ${id} starting cashout sequence`);
+      console.log(`[Server] Player solValue: ${player.solValue}`);
+      console.log(`[Server] Player solAddress: '${player.solAddress}'`);
       this.cashoutStates.set(id, {
         startTime: Date.now(),
         active: true
       });
       
       // Start 3-second countdown
+      // DEBUG LOG: Don't remove player until cashout completes to prevent frozen state
       setTimeout(() => {
         const state = this.cashoutStates.get(id);
         if (state?.active && this.state.players[id]) {
-          // Instant exit: Remove player from game immediately
+          // DEBUG LOG: Process cashout and only remove player after success
           const playerData = { ...this.state.players[id] };
+          console.log(`[Server] Player ${id} cashout timer complete, processing...`);
+          console.log(`[Server] Player data: solValue=${playerData.solValue}, solAddress='${playerData.solAddress}'`);
+          
+          // CHECK: Is solAddress valid?
+          if (!playerData.solAddress || playerData.solAddress.length < 30) {
+            console.error(`[Server] ERROR: Invalid or missing solAddress for player ${id}!`);
+            console.error(`[Server] solAddress: '${playerData.solAddress}', length: ${playerData.solAddress?.length || 0}`);
+            // Don't process cashout, just clear the state
+            this.cashoutStates.delete(id);
+            return;
+          }
+          
+          // Calculate what player receives (pot minus 1% platform fee)
+          const platformFee = playerData.solValue * 0.01;
+          const playerReceives = playerData.solValue - platformFee;
+          
+          // For backend simulation, cashout is instant (no blockchain)
+          // Remove player from state
           delete this.state.players[id];
           this.cashoutStates.delete(id);
-          console.log(`[Server] Player ${id} cashed out successfully`);
+          this.playerJoinTime.delete(id);
+          
+          // Emit cashout success callback
+          const cashoutEvent = {
+            playerId: id,
+            totalPot: playerData.solValue,
+            playerReceives: playerReceives,
+            signature: 'backend_sim_confirmed'
+          };
+          console.log(`[Server] Emitting cashout success event for player ${id}`);
+          this.cashoutCallbacks.forEach(cb => cb(cashoutEvent));
         }
       }, 3000);
     }
@@ -156,13 +194,12 @@ export class ServerSim {
 
     Object.values(this.state.players).forEach(p => {
       const currentSpeed = p.isBoosting ? BOOST_SPEED : BASE_SPEED;
-      p.pos.x += Math.cos(p.angle) * currentSpeed * dt;
-      p.pos.y += Math.sin(p.angle) * currentSpeed * dt;
+      const newX = p.pos.x + Math.cos(p.angle) * currentSpeed * dt;
+      const newY = p.pos.y + Math.sin(p.angle) * currentSpeed * dt;
 
-      if (p.pos.x < 0 || p.pos.x > ARENA_SIZE || p.pos.y < 0 || p.pos.y > ARENA_SIZE) {
-        this.handleDeath(p, 'BOUNDARY', 'Death Zone');
-        return;
-      }
+      // Clamp position to arena bounds instead of killing player
+      p.pos.x = Math.max(0, Math.min(ARENA_SIZE, newX));
+      p.pos.y = Math.max(0, Math.min(ARENA_SIZE, newY));
 
       // Update segments
       p.segments[0] = { x: p.pos.x, y: p.pos.y };
@@ -314,6 +351,22 @@ export class ServerSim {
     delete this.state.players[id];
     this.cashoutStates.delete(id);
     this.playerJoinTime.delete(id);
+  }
+
+  // DEBUG LOG: Register callback for cashout success events
+  onCashoutSuccess(cb) {
+    this.cashoutCallbacks.push(cb);
+    return () => {
+      this.cashoutCallbacks = this.cashoutCallbacks.filter(c => c !== cb);
+    };
+  }
+
+  // DEBUG LOG: Register callback for cashout failed events
+  onCashoutFailed(cb) {
+    this.cashoutFailedCallbacks.push(cb);
+    return () => {
+      this.cashoutFailedCallbacks = this.cashoutFailedCallbacks.filter(c => c !== cb);
+    };
   }
 
   getCashoutProgress(id) {
