@@ -35,11 +35,11 @@ const dbConfig = {
   connectionTimeoutMillis: 2000,
 };
 
-console.log('[API] Database config:', { 
-  host: dbConfig.host, 
-  port: dbConfig.port, 
+console.log('[API] Database config:', {
+  host: dbConfig.host,
+  port: dbConfig.port,
   database: dbConfig.database,
-  user: dbConfig.user 
+  user: dbConfig.user
 });
 
 // Create PostgreSQL pool
@@ -84,7 +84,7 @@ const authenticateToken = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    
+
     // Verify session exists in database
     const sessionResult = await pool.query(
       'SELECT * FROM sessions WHERE user_id = $1 AND expires_at > NOW()',
@@ -142,7 +142,14 @@ app.get('/api/health', async (req, res) => {
     await pool.query('SELECT 1');
     res.json({ status: 'ok', database: 'connected' });
   } catch (err) {
-    res.status(500).json({ status: 'error', database: 'disconnected', error: err.message });
+    console.error('[API] Health check failed - Database connection error:', err.message);
+    console.error('[API] Detailed error:', err);
+    res.status(500).json({
+      status: 'error',
+      database: 'disconnected',
+      error: err.message,
+      hint: 'Check if DB_HOST, DB_USER, and DB_PASSWORD are correct in environment variables.'
+    });
   }
 });
 
@@ -398,7 +405,7 @@ app.get('/api/profiles/username/:username', async (req, res) => {
 app.put('/api/profiles/:userId', authenticateToken, async (req, res) => {
   const updates = req.body;
   const allowedFields = ['internal_pubkey', 'internal_privkey_encrypted', 'account_balance', 'photo_url'];
-  
+
   try {
     const setClause = [];
     const values = [];
@@ -417,7 +424,7 @@ app.put('/api/profiles/:userId', authenticateToken, async (req, res) => {
     }
 
     values.push(req.params.userId);
-    
+
     const result = await pool.query(
       `UPDATE profiles SET ${setClause.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
       values
@@ -509,9 +516,9 @@ app.put('/api/statistics/:userId', authenticateToken, async (req, res) => {
         `INSERT INTO user_statistics (user_id, total_games_played, total_wins, total_losses, total_sol_won, total_sol_lost, best_score, best_length, longest_survival_seconds)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
-        [req.params.userId, updates.total_games_played || 0, updates.total_wins || 0, updates.total_losses || 0, 
-         updates.total_sol_won || 0, updates.total_sol_lost || 0, updates.best_score || 0, 
-         updates.best_length || 0, updates.longest_survival_seconds || 0]
+        [req.params.userId, updates.total_games_played || 0, updates.total_wins || 0, updates.total_losses || 0,
+        updates.total_sol_won || 0, updates.total_sol_lost || 0, updates.best_score || 0,
+        updates.best_length || 0, updates.longest_survival_seconds || 0]
       );
       return res.json({ data: result.rows[0] });
     }
