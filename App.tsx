@@ -28,7 +28,7 @@ const App: React.FC = () => {
   const [dbStatus, setDbStatus] = useState<{ connected: boolean; message: string } | null>(null);
   const [gameInstance, setGameInstance] = useState<Phaser.Game | null>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
-  
+
   // Transaction loading states
   const [isTransactionLoading, setIsTransactionLoading] = useState(false);
   const [transactionMessage, setTransactionMessage] = useState('');
@@ -82,7 +82,7 @@ const App: React.FC = () => {
     handleHashChange();
     restoreUserSession();
     connectToGameServer();
-    
+
     return () => {
       window.removeEventListener('hashchange', handleHashChange);
       if (gameRef.current) {
@@ -113,25 +113,25 @@ const App: React.FC = () => {
 
   const handleStartGame = async (roomId: string, entryFee: number) => {
     if (!currentUser) return;
-    
+
     // Show transaction loading UI
     setIsTransactionLoading(true);
     setTransactionMessage('Processing entry fee transaction...');
     setTransactionSignature('');
-    
+
     try {
       // The transaction will be processed by the server when joining the room
       // We just need to set the game state to show the loading UI
       setActiveStake(entryFee);
-      
+
       const id = `player_${Math.random().toString(36).substr(2, 9)}`;
-      
+
       // Attempt one more WebSocket connection if not already connected
       if (!roomManager.isConnected()) {
         console.log('[App] Attempting to reconnect to multiplayer server before starting game...');
         await roomManager.connectToGameServer();
       }
-      
+
       // Get the server first (this determines if we're in multiplayer or single-player mode)
       const roomServer = roomManager.getServer(roomId);
       if (!roomServer) {
@@ -143,7 +143,7 @@ const App: React.FC = () => {
       // Check multiplayer connection status and log it
       const isMultiplayer = roomManager.isConnected();
       console.log(`[App] Game mode: ${isMultiplayer ? 'MULTIPLAYER' : 'SINGLE-PLAYER (WebSocket not connected)'}`);
-      
+
       if (!isMultiplayer) {
         console.warn('[App] ⚠️ Running in single-player mode - other players will NOT be visible!');
         // Don't suggest checking env vars since we now use fallback URL
@@ -160,17 +160,17 @@ const App: React.FC = () => {
           currentUser.solAddress,
           entryFee
         );
-        
+
         if (!txResult.success) {
           console.error(`[App] Entry fee transaction failed: ${txResult.error}`);
           setError(`Transaction failed: ${txResult.error}`);
           setIsTransactionLoading(false);
           return;
         }
-        
+
         console.log(`[App] Entry fee transaction confirmed: ${txResult.signature}`);
         setTransactionSignature(txResult.signature || '');
-        
+
         // Deduct balance from user's account in database
         await authService.deductBalance(entryFee);
         console.log(`[App] Balance deducted: ${entryFee} SOL`);
@@ -209,7 +209,7 @@ const App: React.FC = () => {
       setTimeout(() => {
         setGameState('PLAYING');
         setIsTransactionLoading(false);
-        
+
         // Force cleanup of any existing game instance
         if (gameRef.current) {
           gameRef.current.destroy(true);
@@ -222,12 +222,12 @@ const App: React.FC = () => {
           const newGame = new Phaser.Game(config);
           gameRef.current = newGame;
           setGameInstance(newGame);
-          
+
           newGame.scene.start('GameScene', { id, server: roomServer });
-          
+
           newGame.events.once('ready', () => {
             const gameScene = newGame.scene.getScene('GameScene');
-            
+
             gameScene?.events.on('kill-alert', async (event: KillEvent) => {
               await authService.updateBalance(event.stolenAmount);
               await syncUser();
@@ -237,7 +237,7 @@ const App: React.FC = () => {
               setDeathData(event);
               setLastEarnings(event.solLost);
               setGameState('GAMEOVER');
-              
+
               // Record game history
               if (currentUser) {
                 try {
@@ -264,7 +264,7 @@ const App: React.FC = () => {
                   // Don't crash the game, just continue
                 }
               }
-              
+
               cleanupGame();
             });
 
@@ -279,63 +279,95 @@ const App: React.FC = () => {
             // Handle cashout success event from GameScene (triggered by ServerSim callback)
             gameScene?.events.on('cashout-success', async (data: any) => {
               console.log('[App] Received cashout-success event:', data);
-              
+
               // Show loading for cashout transaction
               setIsTransactionLoading(true);
-              setTransactionMessage('Cashout successful! Processing...');
+              setTransactionMessage('Processing cashout transaction...');
               setTotalPotAmount(data.totalPot || 0);
-              setTransactionSignature(data.signature || '');
-              
-              // Use playerReceives from ServerSim callback if available, otherwise calculate
-              const winnings = data.playerReceives || (data.totalPot * 0.99);
-              
-              // Sync balance from blockchain
-              await syncUser();
-              setLastEarnings(winnings);
-              console.log(`[App] Cashout successful: Total pot ${data.totalPot} SOL, Player received ${winnings} SOL`);
-              
-              // Hide loading after cashout
-              setTimeout(async () => {
-                setIsTransactionLoading(false);
-                
-                // Get current player data for recording history
-                const playerData = roomServer.getPlayerData(id);
-                
-                // Record game history
-                if (currentUser) {
-                  try {
-                    const success = await gameHistoryService.recordGameResult(
-                      currentUser.id, // Using UUID instead of username
-                      id,
-                      Math.floor(playerData?.length || 0),
-                      Math.floor(playerData?.score || 0),
-                      activeStake,
-                      'cashout',
-                      undefined,
-                      Math.floor(roomServer.getTimeAlive(id) || 0),
-                      winnings,
-                      0 // No loss on cashout
-                    );
-                    if (success) {
-                      console.log('[App] Game win recorded in history with integer values');
-                      console.log('[App] Game win recorded in history');
-                    } else {
-                      console.log('[App] Game history recording failed, but continuing...');
-                    }
-                  } catch (err) {
-                    console.error('[App] Failed to record game history:', err);
-                    // Don't crash the game, just continue
+
+              try {
+                // CRITICAL: Actually send SOL to player's wallet via blockchain
+                const cashoutAmount = data.totalPot || 0;
+
+                if (cashoutAmount > 0 && currentUser) {
+                  console.log(`[App] Processing blockchain cashout: ${cashoutAmount} SOL to ${currentUser.solAddress}`);
+                  setTransactionMessage(`Sending ${cashoutAmount.toFixed(4)} SOL to your wallet...`);
+
+                  const result = await gameTransactionService.processCashout(
+                    id, // player ID
+                    currentUser.solAddress, // player's wallet address
+                    cashoutAmount // total pot amount
+                  );
+
+                  if (result.success) {
+                    console.log(`[App] Blockchain cashout successful! Signature: ${result.signature}`);
+                    setTransactionSignature(result.signature || '');
+                    setTransactionMessage('Cashout successful! SOL sent to your wallet.');
+                  } else {
+                    console.error(`[App] Blockchain cashout failed: ${result.error}`);
+                    setError(`Cashout transaction failed: ${result.error}`);
+                    // Still continue to show cashout success UI but with warning
+                    setTransactionMessage('Cashout recorded but transaction failed. Contact support.');
                   }
+                } else {
+                  console.log('[App] Free game cashout - no blockchain transaction needed');
+                  setTransactionSignature(data.signature || 'FREE_GAME');
                 }
-                
-                setGameState('CASHOUT_SUCCESS');
-                cleanupGame();
-              }, 2000); // Show loading for 2 seconds to let user see the transaction
+
+                // Calculate winnings (after 1% platform fee)
+                const winnings = data.playerReceives || (data.totalPot * 0.99);
+
+                // Sync balance from blockchain
+                await syncUser();
+                setLastEarnings(winnings);
+                console.log(`[App] Cashout complete: Total pot ${data.totalPot} SOL, Player received ${winnings} SOL`);
+
+                // Hide loading after cashout
+                setTimeout(async () => {
+                  setIsTransactionLoading(false);
+
+                  // Get current player data for recording history
+                  const playerData = roomServer.getPlayerData(id);
+
+                  // Record game history
+                  if (currentUser) {
+                    try {
+                      const success = await gameHistoryService.recordGameResult(
+                        currentUser.id, // Using UUID instead of username
+                        id,
+                        Math.floor(playerData?.length || 0),
+                        Math.floor(playerData?.score || 0),
+                        activeStake,
+                        'cashout',
+                        undefined,
+                        Math.floor(roomServer.getTimeAlive(id) || 0),
+                        winnings,
+                        0 // No loss on cashout
+                      );
+                      if (success) {
+                        console.log('[App] Game win recorded in history');
+                      } else {
+                        console.log('[App] Game history recording failed, but continuing...');
+                      }
+                    } catch (err) {
+                      console.error('[App] Failed to record game history:', err);
+                      // Don't crash the game, just continue
+                    }
+                  }
+
+                  setGameState('CASHOUT_SUCCESS');
+                  cleanupGame();
+                }, 2000); // Show loading for 2 seconds to let user see the transaction
+              } catch (err) {
+                console.error('[App] Cashout error:', err);
+                setError(`Cashout failed: ${err}`);
+                setIsTransactionLoading(false);
+              }
             });
           });
         }, 100);
       }, 3000); // Give more time for transaction to process
-      
+
       await syncUser();
     } catch (error) {
       console.error('[App] Error starting game:', error);
@@ -346,23 +378,23 @@ const App: React.FC = () => {
 
   const cleanupGame = async () => {
     console.log('[App] Cleaning up game for potential rejoin...');
-    
+
     // Destroy Phaser game instance
     if (gameRef.current) {
       gameRef.current.destroy(true);
       gameRef.current = null;
       setGameInstance(null);
     }
-    
+
     // Clear the game container div content
     const gameContainer = document.getElementById('game-container');
     if (gameContainer) {
       gameContainer.innerHTML = '';
     }
-    
+
     // Clear cached single-player servers so next game gets fresh instance
     roomManager.clearAllServers();
-    
+
     // Reconnect WebSocket for next game session
     try {
       await roomManager.connectToGameServer();
@@ -396,14 +428,14 @@ const App: React.FC = () => {
           DEBUG: gameState={gameState}, user={currentUser?.username || 'null'}
         </div>
       )}
-      
+
       {/* Transaction Loading UI */}
-      <TransactionLoading 
+      <TransactionLoading
         isVisible={isTransactionLoading}
         message={transactionMessage}
         transactionSignature={transactionSignature}
       />
-      
+
       {dbStatus && gameState !== 'PLAYING' && (
         <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-full border text-[10px] font-black uppercase tracking-widest flex items-center gap-2 backdrop-blur-md transition-all duration-500 animate-in slide-in-from-top-4 ${dbStatus.connected ? 'bg-green-500/10 border-green-500/30 text-green-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
           <div className={`w-1.5 h-1.5 rounded-full ${dbStatus.connected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]' : 'bg-red-500 animate-pulse'}`}></div>
@@ -416,9 +448,9 @@ const App: React.FC = () => {
         <Dashboard user={currentUser} onPlay={handleProceedToStake} onLogout={handleLogout} onBalanceChange={syncUser} />
       )}
       {gameState === 'STAKE_SELECTION' && currentUser && (
-        <StakeSelector 
-          balance={currentUser.balance} 
-          onConfirm={handleStartGame} 
+        <StakeSelector
+          balance={currentUser.balance}
+          onConfirm={handleStartGame}
           onCancel={handleBackToMenu}
         />
       )}
@@ -493,7 +525,7 @@ const App: React.FC = () => {
 
       <div id="game-container" className={`${gameState === 'PLAYING' ? 'block' : 'hidden'}`}></div>
       {gameState === 'PLAYING' && <GameUI game={gameInstance} initialStake={activeStake} />}
-      
+
       <style>{`
         .text-glow-red { text-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }
         .text-glow-green { text-shadow: 0 0 10px rgba(34, 197, 94, 0.5); }
