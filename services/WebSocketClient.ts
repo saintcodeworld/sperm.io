@@ -249,14 +249,6 @@ export class WebSocketClient {
       this.socket.once('join-success', onJoinSuccess);
       this.socket.once('join-error', onJoinError);
 
-      // Emit join request
-      this.socket.emit('join-room', {
-        roomId,
-        playerId,
-        playerName,
-        entryFee
-      });
-
       // Increased timeout to 10 seconds to avoid timeout errors during peak traffic
       setTimeout(() => {
         this.socket?.off('join-success', onJoinSuccess);
