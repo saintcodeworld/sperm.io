@@ -104,7 +104,7 @@ class MultiplayerGameServer {
           timestamp: Date.now()
         });
       }
-    }, 75); // 13.3 FPS (75ms interval) - reduced for better network performance
+    }, 50); // 20 FPS (50ms interval) - increased tick rate for smoother gameplay
   }
 
   initializeRooms() {
@@ -462,7 +462,7 @@ class MultiplayerGameServer {
         } catch (error) {
           console.error(`Error broadcasting to room ${roomId}:`, error);
         }
-      }, 75); // 13.3 FPS updates (75ms interval) for better network performance
+      }, 50); // 20 FPS updates (50ms interval) for better network performance
     }
 
     socket.on('disconnect', async () => {
