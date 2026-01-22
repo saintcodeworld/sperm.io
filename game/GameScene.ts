@@ -563,19 +563,31 @@ export default class GameScene extends Phaser.Scene {
       // Local movement prediction
       const pointer = this.input.activePointer;
       const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
-      const angle = Phaser.Math.Angle.Between(head.x, head.y, worldPoint.x, worldPoint.y);
 
-      // Apply movement with smooth rotation
+      // Calculate distance to pointer
+      const distToPointer = Phaser.Math.Distance.Between(head.x, head.y, worldPoint.x, worldPoint.y);
+
+      // Only calculate new target angle if pointer is far enough (prevents jittering)
+      // If close, keep swimming in current direction
+      let targetAngle = head.rotation;
+      if (distToPointer > 20) {
+        targetAngle = Phaser.Math.Angle.Between(head.x, head.y, worldPoint.x, worldPoint.y);
+      }
+
+      // Smoothly rotate head towards target angle
+      head.rotation = Phaser.Math.Angle.RotateTo(head.rotation, targetAngle, 0.15);
+
+      // Apply forward movement in the direction we are currently facing
       const speed = this.isBoosting ? 6 : 4;
-      const dx = Math.cos(angle) * speed;
-      const dy = Math.sin(angle) * speed;
+      const dx = Math.cos(head.rotation) * speed;
+      const dy = Math.sin(head.rotation) * speed;
 
       // Update local position - client authority
       head.x += dx;
       head.y += dy;
 
-      // Smooth rotation with increased interpolation
-      head.rotation = Phaser.Math.Angle.RotateTo(head.rotation, angle, 0.15);
+      // Define angle for network updates (use current actual rotation)
+      const angle = head.rotation;
 
       // Only validate against server position if deviation is extreme
       const serverPos = this.server?.getPlayerData(this.myId)?.pos;
