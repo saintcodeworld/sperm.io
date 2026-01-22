@@ -248,9 +248,13 @@ export class ServerSim {
       // Collision detection with other players
       Object.values(this.state.players).forEach(other => {
         if (p.id === other.id) return;
+        // Skip if player is already dead (removed from state)
+        if (!this.state.players[p.id]) return;
+
         for (let i = 0; i < other.segments.length; i++) {
           if (Math.hypot(p.pos.x - other.segments[i].x, p.pos.y - other.segments[i].y) < 18) {
             this.handleDeath(p, 'PLAYER', other.name, other.id);
+            return; // CRITICAL: Stop processing collisions after death
           }
         }
       });
@@ -260,8 +264,14 @@ export class ServerSim {
   }
 
   handleDeath(player, reason, killedByName, killerId) {
-    // Immediately remove player from active players to stop position broadcasts
     const playerId = player.id;
+
+    // CRITICAL: Check if player is already dead to prevent duplicate processing
+    if (!this.state.players[playerId]) {
+      console.log(`[ServerSim] Player ${playerId} already dead, skipping duplicate death`);
+      return;
+    }
+
     const stolenAmount = player.solValue;
     const timeAlive = this.getTimeAlive(playerId);
 
@@ -276,9 +286,10 @@ export class ServerSim {
       timeAlive
     };
 
-    // Handle kill rewards before removal
+    // Handle kill rewards before removal (only once!)
     if (killerId && this.state.players[killerId]) {
       this.state.players[killerId].solValue += stolenAmount;
+      console.log(`[ServerSim] Player ${killerId} killed ${player.name}, gained ${stolenAmount} SOL`);
       this.killCallbacks.forEach(cb => cb({
         killerId,
         victimName: player.name,
@@ -287,15 +298,7 @@ export class ServerSim {
       }));
     }
 
-    // Immediately remove player from state
-    delete this.state.players[playerId];
-    this.cashoutStates.delete(playerId);
-    this.playerJoinTime.delete(playerId);
-
-    // Notify all clients of death
-    this.deathCallbacks.forEach(cb => cb(event));
-
-    // Convert dead player into food
+    // Convert dead player into food BEFORE removing from state
     player.segments.forEach((seg, idx) => {
       if (idx % 2 === 0) {
         const foodId = `corpse_${Math.random()}`;
@@ -309,10 +312,12 @@ export class ServerSim {
       }
     });
 
-    delete this.state.players[player.id];
-    this.cashoutStates.delete(player.id);
-    this.playerJoinTime.delete(player.id);
+    // Remove player from state (only once!)
+    delete this.state.players[playerId];
+    this.cashoutStates.delete(playerId);
+    this.playerJoinTime.delete(playerId);
 
+    // Notify all clients of death (only once!)
     this.deathCallbacks.forEach(cb => cb(event));
   }
 
