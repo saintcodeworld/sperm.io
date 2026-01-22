@@ -15,7 +15,12 @@ interface ActiveKillAlert extends KillEvent {
 
 export const GameUI: React.FC<GameUIProps> = ({ game, initialStake }) => {
   const [leaderboard, setLeaderboard] = useState<PlayerData[]>([]);
-  const [minimapPos, setMinimapPos] = useState({ x: 0, y: 0 });
+  const [minimapData, setMinimapData] = useState<{
+    x: number;
+    y: number;
+    otherPlayers: Array<{ x: number, y: number, isSelf: boolean }>;
+  }>({ x: 0, y: 0, otherPlayers: [] });
+
   const [currentPot, setCurrentPot] = useState(initialStake);
   const [cashoutProgress, setCashoutProgress] = useState(0);
   const [killAlerts, setKillAlerts] = useState<ActiveKillAlert[]>([]);
@@ -28,10 +33,17 @@ export const GameUI: React.FC<GameUIProps> = ({ game, initialStake }) => {
     if (!scene) return;
 
     const onLeaderboard = (data: PlayerData[]) => setLeaderboard(data);
-    const onMinimap = (pos: { x: number, y: number, solValue?: number }) => {
-      setMinimapPos({ x: pos.x, y: pos.y });
-      if (pos.solValue !== undefined) setCurrentPot(pos.solValue);
+
+    // Update handler to receive full player list
+    const onMinimap = (data: { x: number, y: number, solValue?: number, otherPlayers?: Array<{ x: number, y: number, isSelf: boolean }> }) => {
+      setMinimapData({
+        x: data.x,
+        y: data.y,
+        otherPlayers: data.otherPlayers || []
+      });
+      if (data.solValue !== undefined) setCurrentPot(data.solValue);
     };
+
     const onProgress = (p: number) => setCashoutProgress(p);
     const onKill = (event: KillEvent) => {
       const alert = { ...event, id: nextAlertId.current++ };
@@ -58,10 +70,12 @@ export const GameUI: React.FC<GameUIProps> = ({ game, initialStake }) => {
 
   return (
     <div className="pointer-events-none absolute inset-0 font-sans text-white overflow-hidden">
+      {/* ... (Keep existing Kill Alerts and Pot HUD code identical) ... */}
+
       {/* Kill Alerts */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-3 w-full z-20">
         {killAlerts.map(alert => (
-          <div 
+          <div
             key={alert.id}
             className="bg-black/80 border border-green-500/50 px-6 py-3 rounded-2xl shadow-[0_0_20px_rgba(34,197,94,0.3)] animate-bounce-in"
           >
@@ -79,7 +93,7 @@ export const GameUI: React.FC<GameUIProps> = ({ game, initialStake }) => {
             <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Total Session Value</p>
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse shadow-[0_0_5px_rgba(34,197,94,0.8)]"></div>
           </div>
-          
+
           <div className="flex items-baseline space-x-2">
             <span className="text-4xl font-mono font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-green-400 to-emerald-500 drop-shadow-lg">
               {currentPot.toFixed(4)}
@@ -91,11 +105,11 @@ export const GameUI: React.FC<GameUIProps> = ({ game, initialStake }) => {
             <div>Deposit: <span className="text-white">{initialStake.toFixed(2)}</span></div>
             <div>Bounty: <span className="text-green-400">+{bountyEarnings.toFixed(4)}</span></div>
           </div>
-          
+
           {/* Subtle background glow */}
           <div className="absolute -right-4 -bottom-4 w-16 h-16 bg-green-500/10 blur-2xl rounded-full"></div>
         </div>
-        
+
         {cashoutProgress === 0 ? (
           <div className="flex items-center space-x-2 pl-1">
             <div className="bg-green-500/20 border border-green-500/40 px-2 py-1 rounded text-[9px] text-green-300 font-bold uppercase tracking-widest animate-pulse">
@@ -108,7 +122,7 @@ export const GameUI: React.FC<GameUIProps> = ({ game, initialStake }) => {
         ) : (
           <div className="bg-black/60 backdrop-blur-md p-3 rounded-2xl border border-green-500/30 shadow-2xl flex items-center gap-3">
             <div className="relative w-24 h-12 bg-black/50 rounded-lg border-2 border-green-500/30 overflow-hidden shadow-[0_0_20px_rgba(34,197,94,0.2)]">
-              <div 
+              <div
                 className="absolute bottom-0 left-0 w-full bg-green-500 shadow-[0_0_15px_rgba(34,197,94,0.6)]"
                 style={{ height: `${cashoutProgress * 100}%` }}
               />
@@ -149,14 +163,29 @@ export const GameUI: React.FC<GameUIProps> = ({ game, initialStake }) => {
 
       {/* Minimap */}
       <div className="absolute bottom-8 right-8 w-40 h-40 bg-black/40 backdrop-blur-sm rounded-[2rem] border border-white/10 overflow-hidden shadow-2xl group transition-transform hover:scale-105">
-        <div 
+        {/* Render Self */}
+        <div
           className="absolute w-2.5 h-2.5 bg-blue-500 rounded-full shadow-[0_0_12px_rgba(59,130,246,1)] z-10 border border-white/50"
-          style={{ 
-            left: `${(minimapPos.x / ARENA_SIZE) * 100}%`,
-            top: `${(minimapPos.y / ARENA_SIZE) * 100}%`,
+          style={{
+            left: `${(minimapData.x / ARENA_SIZE) * 100}%`,
+            top: `${(minimapData.y / ARENA_SIZE) * 100}%`,
             transform: 'translate(-50%, -50%)'
           }}
         />
+
+        {/* Render Other Players */}
+        {minimapData.otherPlayers.map((p, idx) => (
+          <div
+            key={idx}
+            className="absolute w-1.5 h-1.5 bg-red-500 rounded-full shadow-[0_0_5px_rgba(239,68,68,0.8)] z-0 opacity-80"
+            style={{
+              left: `${(p.x / ARENA_SIZE) * 100}%`,
+              top: `${(p.y / ARENA_SIZE) * 100}%`,
+              transform: 'translate(-50%, -50%)'
+            }}
+          />
+        ))}
+
         {/* Dynamic Grid Overlay on Minimap */}
         <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#fff 1px, transparent 0)', backgroundSize: '20px 20px' }}></div>
         <div className="absolute inset-0 border border-blue-500/20 rounded-[2rem] animate-pulse"></div>
@@ -170,7 +199,7 @@ export const GameUI: React.FC<GameUIProps> = ({ game, initialStake }) => {
           <p className="text-blue-400"><span className="text-white font-black">EXTRACTION:</span> Hold Space</p>
         </div>
         <div className="bg-red-500/10 border border-red-500/20 px-4 py-2 rounded-xl backdrop-blur-sm">
-           <p className="text-[9px] text-red-400 font-black uppercase tracking-widest">Danger: Avoid Map Perimeter</p>
+          <p className="text-[9px] text-red-400 font-black uppercase tracking-widest">Danger: Avoid Map Perimeter</p>
         </div>
       </div>
 
