@@ -20,7 +20,7 @@ ENV VITE_SOLANA_CLUSTER=$VITE_SOLANA_CLUSTER
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN npm install
 
 # Copy source code
 COPY . .
