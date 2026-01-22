@@ -251,6 +251,30 @@ class MultiplayerGameServer {
             }
           });
 
+          // Listen for player death
+          room.server.onPlayerDeath((event) => {
+            console.log(`[GameServer] Player died: ${event.id} (Reason: ${event.reason})`);
+
+            // Remove from global players map immediately
+            this.globalPlayers.delete(event.id);
+
+            // Broadcast death to ONLY the specific room (so local client handles game over)
+            this.io.to(roomId).emit('player-death', event);
+
+            // Broadcast disconnection to main-game to remove from other players' view
+            this.io.to('main-game').emit('player-disconnected', {
+              playerId: event.id,
+              timestamp: Date.now()
+            });
+          });
+
+          // Listen for kills
+          room.server.onKill((event) => {
+            console.log(`[GameServer] Kill event: ${event.killerId} killed ${event.victimName}`);
+            // Broadcast kill to the room for UI alerts
+            this.io.to(roomId).emit('kill', event);
+          });
+
           // Start sending game state updates
           this.startGameStateUpdates(socket, room);
 

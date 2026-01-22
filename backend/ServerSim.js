@@ -248,7 +248,7 @@ export class ServerSim {
       // Collision detection with other players
       Object.values(this.state.players).forEach(other => {
         if (p.id === other.id) return;
-        for (let i = 3; i < other.segments.length; i++) {
+        for (let i = 0; i < other.segments.length; i++) {
           if (Math.hypot(p.pos.x - other.segments[i].x, p.pos.y - other.segments[i].y) < 18) {
             this.handleDeath(p, 'PLAYER', other.name, other.id);
           }
