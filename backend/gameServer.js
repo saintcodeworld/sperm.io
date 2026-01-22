@@ -348,9 +348,27 @@ class MultiplayerGameServer {
       const roomId = this.playerRooms.get(socket.id);
       if (!roomId) return;
 
+      const room = this.rooms.get(roomId);
+      if (!room) return;
+
       const { playerId, x, y, angle, velocity } = data;
 
-      // DEBUG LOG: Update global player state for cross-room visibility
+      // CRITICAL: Sync client position into the actual game simulation for collision detection
+      const serverPlayer = room.server.state?.players?.[playerId];
+      if (serverPlayer) {
+        // Update both head position and first segment
+        serverPlayer.pos.x = x;
+        serverPlayer.pos.y = y;
+        serverPlayer.angle = angle;
+
+        // Update segments to follow the head (shift segments toward new position)
+        if (serverPlayer.segments && serverPlayer.segments.length > 0) {
+          serverPlayer.segments[0] = { x, y };
+          // Gradually shift other segments (the ServerSim.update() will refine these)
+        }
+      }
+
+      // Update global player state for cross-room visibility
       if (this.globalPlayers.has(playerId)) {
         const globalPlayer = this.globalPlayers.get(playerId);
         globalPlayer.x = x;
@@ -370,7 +388,7 @@ class MultiplayerGameServer {
 
       // Log position updates occasionally for debugging
       if (Math.random() < 0.01) { // Only log 1% of position updates
-        console.log(`[POS] Player ${playerId} at x=${x.toFixed(1)}, y=${y.toFixed(1)} (broadcast to main-game)`);
+        console.log(`[POS] Player ${playerId} at x=${x.toFixed(1)}, y=${y.toFixed(1)} (synced to ServerSim)`);
       }
     });
 
