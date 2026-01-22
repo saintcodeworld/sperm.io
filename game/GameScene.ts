@@ -392,7 +392,12 @@ export default class GameScene extends Phaser.Scene {
 
     // Only update properties like name, color, etc. directly
     // Position updates will be handled through interpolation in the update() method
-    sperm.update(updateData); // Direct update only for initial creation
+    if (!this.otherPlayers.has(playerData.id)) {
+      sperm.update(updateData); // Direct update only for initial creation
+    } else {
+      // For existing players, only update non-position data
+      sperm.updateNonPosition(updateData);
+    }
   }
 
   // Handle player moved events
@@ -437,15 +442,18 @@ export default class GameScene extends Phaser.Scene {
       });
     }
 
-    // Ensure player exists for rendering
-    this.createOrUpdateNetworkPlayer({
-      id: data.playerId,
-      angle: data.angle,
-      boost: data.boost,
-      x: data.x,
-      y: data.y,
-      timestamp: data.timestamp
-    });
+    // Ensure player exists for rendering, but DON'T update position directly
+    // Position updates are handled via the stateBuffer in update()
+    if (!this.otherPlayers.has(data.playerId)) {
+      this.createOrUpdateNetworkPlayer({
+        id: data.playerId,
+        angle: data.angle,
+        boost: data.boost,
+        x: data.x,
+        y: data.y,
+        timestamp: data.timestamp
+      });
+    }
   }
 
   // Handle direct position updates
@@ -670,49 +678,79 @@ export default class GameScene extends Phaser.Scene {
       this.fpsText.setText(`FPS: ${Math.round(this.game.loop.actualFps)}`);
 
       // Smooth interpolation for other players
-      const renderTime = this.time.now - this.RENDER_DELAY;
+      // CRITICAL FIX: Use Date.now() to match server timestamps, NOT this.time.now (which is local game time)
+      const renderTime = Date.now() - this.RENDER_DELAY;
 
       this.otherPlayers.forEach((sperm, id) => {
         const buffer = this.stateBuffer.get(id);
         if (!buffer || buffer.length < 2) return;
 
-        // Find states to interpolate between
-        const states = buffer
-          .filter(state => state.timestamp <= renderTime)
-          .slice(-3); // Use last 3 states for smoother interpolation
+        // Find the two states surrounding the render time
+        let prev = null;
+        let next = null;
 
-        if (states.length < 2) return;
+        for (let i = 0; i < buffer.length; i++) {
+          if (buffer[i].timestamp > renderTime) {
+            next = buffer[i];
+            prev = i > 0 ? buffer[i - 1] : null;
+            break;
+          }
+        }
 
-        const latest = states[states.length - 1];
-        const previous = states[states.length - 2];
+        // If we found a gap to interpolate
+        if (prev && next) {
+          const total = next.timestamp - prev.timestamp;
+          const portion = renderTime - prev.timestamp;
+          const ratio = portion / total;
 
-        // Hermite interpolation for smoother movement
-        const t = (renderTime - previous.timestamp) / (latest.timestamp - previous.timestamp);
-        const alpha = Phaser.Math.Easing.Cubic.InOut(Math.max(0, Math.min(1, t)));
+          const t = Math.max(0, Math.min(1, ratio));
+          // Cubic easing for smooth movement
+          const alpha = Phaser.Math.Easing.Cubic.InOut(t);
 
-        const newX = Phaser.Math.Linear(previous.state.x, latest.state.x, alpha);
-        const newY = Phaser.Math.Linear(previous.state.y, latest.state.y, alpha);
-        const newAngle = Phaser.Math.Angle.RotateTo(previous.state.angle, latest.state.angle, 0.1);
+          const newX = Phaser.Math.Linear(prev.state.x, next.state.x, alpha);
+          const newY = Phaser.Math.Linear(prev.state.y, next.state.y, alpha);
+          const newAngle = Phaser.Math.Angle.RotateTo(prev.state.angle, next.state.angle, 0.1);
 
-        sperm.update({
-          id,
-          name: (sperm as any).nameText?.text || 'Unknown',
-          pos: { x: newX, y: newY },
-          angle: newAngle,
-          isBoosting: latest.state.boost || false,
-          score: latest.state.score || 0,
-          solValue: latest.state.solValue || 0,
-          segments: latest.state.segments || [],
-          length: 30,
-          color: sperm.getColor(),
-          solAddress: ''
-        });
+          sperm.update({
+            id,
+            name: (sperm as any).nameText?.text || 'Unknown',
+            pos: { x: newX, y: newY },
+            angle: newAngle,
+            isBoosting: next.state.boost,
+            score: next.state.score,
+            solValue: next.state.solValue,
+            segments: next.state.segments, // Segments might need similar interpolation but head is most important
+            length: 30,
+            color: sperm.getColor(),
+            solAddress: ''
+          });
+        }
+        // If we have no "next" state (packets haven't arrived yet), we extrapolate or clamp
+        else if (!next && buffer.length > 0) {
+          const last = buffer[buffer.length - 1];
+          // Extrapolate or just snap to last known
+          sperm.update({
+            id,
+            name: (sperm as any).nameText?.text || 'Unknown',
+            pos: { x: last.state.x, y: last.state.y },
+            angle: last.state.angle,
+            isBoosting: last.state.boost,
+            score: last.state.score,
+            solValue: last.state.solValue,
+            segments: last.state.segments,
+            length: 30,
+            color: sperm.getColor(),
+            solAddress: ''
+          });
+        }
 
-        // Cleanup old states
-        while (buffer.length > this.BUFFER_SIZE) buffer.shift();
+        // Cleanup: remove states that are way too old (older than 2 seconds)
+        // Keep some history for interpolation
+        while (buffer.length > 0 && buffer[0].timestamp < renderTime - 2000) {
+          buffer.shift();
+        }
       });
     }
-  }
 
   private handleStateUpdate(state: GameState) {
     // IMPORTANT: Only handle LOCAL player from state updates
