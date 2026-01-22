@@ -233,7 +233,7 @@ export class ServerSim {
 
         if (dist < 30) {
           p.score += f.value;
-          p.length += 0.25 * f.value;
+          p.length += 3.0 * f.value;
           delete this.state.food[f.id];
 
           setTimeout(() => this.spawnFood(), 4000);

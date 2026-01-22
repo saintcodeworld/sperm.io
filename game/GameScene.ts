@@ -578,7 +578,8 @@ export default class GameScene extends Phaser.Scene {
       head.rotation = Phaser.Math.Angle.RotateTo(head.rotation, targetAngle, 0.15);
 
       // Apply forward movement in the direction we are currently facing
-      const speed = this.isBoosting ? 6 : 4;
+      // FIX: Disable boost if cashing out
+      const speed = (this.isBoosting && !this.isCashingOut) ? 6 : 4;
       const dx = Math.cos(head.rotation) * speed;
       const dy = Math.sin(head.rotation) * speed;
 
@@ -725,7 +726,7 @@ export default class GameScene extends Phaser.Scene {
 
           sperm.update({
             id,
-            name: (sperm as any).nameText?.text || 'Unknown',
+            name: sperm.getName(), // Use original name to prevent duplication (e.g. "Name (0.1 SOL) (0.1 SOL)")
             pos: { x: newX, y: newY },
             angle: newAngle,
             isBoosting: next.state.boost,
@@ -743,7 +744,7 @@ export default class GameScene extends Phaser.Scene {
           // Extrapolate or just snap to last known
           sperm.update({
             id,
-            name: (sperm as any).nameText?.text || 'Unknown',
+            name: sperm.getName(),
             pos: { x: last.state.x, y: last.state.y },
             angle: last.state.angle,
             isBoosting: last.state.boost,

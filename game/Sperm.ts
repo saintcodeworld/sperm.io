@@ -13,6 +13,7 @@ export class Sperm {
   private nameText: Phaser.GameObjects.Text;
   private id: string;
   private color: number;
+  private originalName: string;
 
   // Local segment tracking for client-controlled movement
   private localSegments: { x: number; y: number }[] = [];
@@ -22,10 +23,16 @@ export class Sperm {
     return this.color;
   }
 
+  public getName(): string {
+    return this.originalName;
+  }
+
   constructor(scene: Phaser.Scene, data: PlayerData) {
     this.scene = scene;
     this.id = data.id;
     this.color = data.color;
+    // Store original name to prevent recursive appending of SOL value
+    this.originalName = data.name.split(' (')[0];
 
     // Head - Realistic sperm head (oval shape)
     this.head = scene.add.ellipse(data.pos.x, data.pos.y, 28, 20, this.color);
@@ -35,7 +42,7 @@ export class Sperm {
     this.tailGraphics = scene.add.graphics();
 
     // Name label
-    this.nameText = scene.add.text(data.pos.x, data.pos.y - 28, data.name, {
+    this.nameText = scene.add.text(data.pos.x, data.pos.y - 28, this.originalName, {
       fontSize: '12px',
       color: '#ffffff',
       fontStyle: 'bold',
@@ -77,18 +84,22 @@ export class Sperm {
 
     if (this.localSegments.length < 2) return;
 
-    const baseWidth = 12;
+    // Dynamic width based on size/score (more eating = thicker tail)
+    const growthFactor = Math.min(10, this.localSegments.length / 10);
+    const baseWidth = 12 + growthFactor;
     const segmentCount = this.localSegments.length;
 
-    // Draw tail as connected line segments with tapering
+    // Draw tail as connected line segments with MINIMAL tapering (as requested)
     for (let i = 1; i < segmentCount; i++) {
       const seg = this.localSegments[i];
       const prevSeg = this.localSegments[i - 1];
 
-      // Calculate tapering - thinner towards the end
+      // Almost uniform thickness, very slight taper at the very end only
       const progress = i / segmentCount;
-      const thickness = Math.max(2, baseWidth * (1 - progress * 0.85));
-      const alpha = 0.9 * (1 - progress * 0.7);
+      const thickness = Math.max(baseWidth * 0.8, baseWidth * (1 - progress * 0.1)); // Keep 90% thickness
+
+      // Dynamic alpha
+      const alpha = 0.9 * (1 - progress * 0.3);
 
       this.tailGraphics.lineStyle(thickness, this.color, alpha);
       this.tailGraphics.beginPath();
@@ -134,7 +145,8 @@ export class Sperm {
     this.head.setPosition(data.pos.x, data.pos.y);
     this.head.setRotation(data.angle);
     this.nameText.setPosition(data.pos.x, data.pos.y - 28);
-    this.nameText.setText(`${data.name} (${(data.solValue || 0).toFixed(2)} SOL)`);
+    // Use original name to avoid duplication
+    this.nameText.setText(`${this.originalName} (${(data.solValue || 0).toFixed(2)} SOL)`);
 
     // Update segments from server data (for other players)
     if (data.segments && data.segments.length > 0) {
