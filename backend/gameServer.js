@@ -35,7 +35,7 @@ const httpServer = createServer(app);
 
 // CORS origins configuration - allow frontend domains
 // For production, specify your frontend domain(s)
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS 
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
   : ['*']; // Default to all for testing
 
@@ -65,7 +65,7 @@ const io = new Server(httpServer, {
 // Debug middleware to log all socket.io events
 io.use((socket, next) => {
   console.log(`[DEBUG] Socket ${socket.id} attempting connection`);
-  const address = socket.handshake.headers['x-forwarded-for'] || 
+  const address = socket.handshake.headers['x-forwarded-for'] ||
     socket.handshake.address;
   console.log(`[DEBUG] Connection from address: ${address}`);
   console.log(`[DEBUG] Transport: ${socket.conn.transport.name}`);
@@ -81,21 +81,21 @@ class MultiplayerGameServer {
     this.globalPlayers = new Map(); // DEBUG LOG: Global player state for cross-room visibility
     this.io = io; // Store reference to io
     this.initializeRooms();
-    
+
     // DEBUG LOG: Start global game state broadcaster for main-game room
     this.startGlobalBroadcaster();
   }
-  
+
   // Broadcast all player positions to main-game room at 20 FPS to reduce network load
   startGlobalBroadcaster() {
     setInterval(() => {
       const allPlayers = [];
-      
+
       // Collect all players from global state
       this.globalPlayers.forEach((playerData, playerId) => {
         allPlayers.push(playerData);
       });
-      
+
       // ONLY emit if we have players - NEVER send empty arrays
       if (allPlayers.length > 0) {
         // Broadcast to all connected clients in main-game room
@@ -123,7 +123,7 @@ class MultiplayerGameServer {
   handleConnection(socket) {
     console.log(`👤 Player connected: ${socket.id}`);
     console.log(`👤 Socket connected from: ${socket.handshake.address}`);
-    
+
     // Log ALL events for debugging
     socket.onAny((eventName, ...args) => {
       if (eventName === 'player-input') {
@@ -138,7 +138,7 @@ class MultiplayerGameServer {
       const { roomId, playerId, playerName, entryFee, solAddress } = data;
       console.log(`[GameServer] Join data: roomId=${roomId}, playerId=${playerId}, playerName=${playerName}, solAddress=${solAddress}`);
       const room = this.rooms.get(roomId);
-      
+
       if (!room) {
         console.error(`[GameServer] Room ${roomId} not found! Available rooms:`, Array.from(this.rooms.keys()));
         socket.emit('join-error', { message: 'Room not found' });
@@ -151,13 +151,13 @@ class MultiplayerGameServer {
           room.players.add(socket.id);
           this.playerRooms.set(socket.id, roomId);
           this.playerSockets.set(socket.id, playerId);
-          
+
           // DEBUG LOG: Get spawn position from server state
           const playerState = room.server.state?.players?.[playerId];
           const spawnX = playerState?.pos?.x || 2500; // Center fallback
           const spawnY = playerState?.pos?.y || 2500;
           const spawnAngle = playerState?.angle || 0;
-          
+
           // DEBUG LOG: Store in global player state for cross-room visibility
           this.globalPlayers.set(playerId, {
             id: playerId,
@@ -168,31 +168,31 @@ class MultiplayerGameServer {
             score: 0,
             roomId: roomId
           });
-          
+
           console.log(`[SPAWN] Player ${playerId} spawned at x:${spawnX.toFixed(1)}, y:${spawnY.toFixed(1)}`);
-          
+
           // Join the Socket.IO room
           await socket.join(roomId);
-          
+
           // Log all sockets in this room for debugging
           const socketsInRoom = await this.io.in(roomId).fetchSockets();
-          console.log(`👥 Room ${roomId} now has ${socketsInRoom.length} sockets:`, 
+          console.log(`👥 Room ${roomId} now has ${socketsInRoom.length} sockets:`,
             socketsInRoom.map(s => s.id));
-          
+
           socket.emit('join-success', { roomId });
-          
+
           // DEBUG LOG: Broadcast to ALL players in main-game room (not just roomId)
           // This ensures all players can see each other regardless of entry fee room
-          socket.to('main-game').emit('player-joined', { 
-            playerId, 
+          socket.to('main-game').emit('player-joined', {
+            playerId,
             playerName,
             x: spawnX,
             y: spawnY,
             angle: spawnAngle,
             timestamp: Date.now()
           });
-          
-              
+
+
           // Send current players to the new player
           const currentState = room.server.state;
           const currentPlayers = Object.keys(currentState.players || {}).map(id => ({
@@ -202,14 +202,14 @@ class MultiplayerGameServer {
             y: currentState.players[id].y,
             angle: currentState.players[id].angle
           }));
-          
+
           socket.emit('current-players', {
             players: currentPlayers,
             timestamp: Date.now()
           });
-          
+
           console.log(`[JOIN] Sent ${currentPlayers.length} current players to new player ${playerId}`);
-          
+
           // DEBUG LOG: Wire up cashout callbacks to emit WebSocket events
           // Listen for cashout success from this room's ServerSim
           room.server.onCashoutSuccess((event) => {
@@ -217,7 +217,7 @@ class MultiplayerGameServer {
             // Find the socket for this player
             const playerSocketId = Array.from(this.playerSockets.entries())
               .find(([_, pId]) => pId === event.playerId)?.[0];
-            
+
             if (playerSocketId) {
               const playerSocket = this.io.sockets.sockets.get(playerSocketId);
               if (playerSocket) {
@@ -231,13 +231,13 @@ class MultiplayerGameServer {
               }
             }
           });
-          
+
           // Listen for cashout failure
           room.server.onCashoutFailed((event) => {
             console.log(`[GameServer] Cashout failed for player ${event.playerId}, emitting to socket...`);
             const playerSocketId = Array.from(this.playerSockets.entries())
               .find(([_, pId]) => pId === event.playerId)?.[0];
-            
+
             if (playerSocketId) {
               const playerSocket = this.io.sockets.sockets.get(playerSocketId);
               if (playerSocket) {
@@ -250,10 +250,10 @@ class MultiplayerGameServer {
               }
             }
           });
-          
+
           // Start sending game state updates
           this.startGameStateUpdates(socket, room);
-          
+
           console.log(`✅ ${playerName} joined ${roomId}`);
         } else {
           socket.emit('join-error', { message: 'Failed to join room' });
@@ -267,30 +267,30 @@ class MultiplayerGameServer {
     socket.on('player-input', (data) => {
       const roomId = this.playerRooms.get(socket.id);
       if (!roomId) return;
-      
+
       const room = this.rooms.get(roomId);
       if (!room) return;
-      
+
       const { playerId, angle, boost, cashout } = data;
-      
+
       // DEBUG LOG: Track ALL input
       if (Math.random() < 0.01) { // Only log 1% to avoid spam
         console.log(`[GameServer] Player ${playerId} input: angle=${angle.toFixed(2)}, boost=${boost}, cashout=${cashout}`);
       }
-      
+
       // DEBUG LOG: Track cashout input specifically
       if (cashout) {
         console.log(`[GameServer] Player ${playerId} CASHOUT INPUT RECEIVED! cashout=${cashout}`);
       }
-      
+
       // Process input in game server
       room.server.input(playerId, angle, boost, cashout);
-      
+
       // Get updated position from server state
       const playerState = room.server.state?.players?.[playerId];
       const posX = playerState?.pos?.x || 0;
       const posY = playerState?.pos?.y || 0;
-      
+
       // DEBUG LOG: Update global player state for cross-room visibility
       if (this.globalPlayers.has(playerId)) {
         const globalPlayer = this.globalPlayers.get(playerId);
@@ -299,7 +299,7 @@ class MultiplayerGameServer {
         globalPlayer.angle = angle;
         globalPlayer.boost = boost;
       }
-      
+
       // Immediately broadcast this player's movement to ALL players in main-game room
       // This ensures all players can see each other regardless of game room
       socket.to('main-game').emit('player-moved', {
@@ -312,20 +312,20 @@ class MultiplayerGameServer {
         y: posY,
         timestamp: Date.now()
       });
-      
+
       // Debug log for player movement (throttled to avoid console spam)
       if (Math.random() < 0.05) { // Only log ~5% of movements
         console.log(`[MOVE] Player ${playerId} at (${posX.toFixed(1)}, ${posY.toFixed(1)}) broadcast to main-game`);
       }
     });
-    
+
     // Handle player position updates (for clients that send direct position data)
     socket.on('player-position', (data) => {
       const roomId = this.playerRooms.get(socket.id);
       if (!roomId) return;
-      
+
       const { playerId, x, y, angle, velocity } = data;
-      
+
       // DEBUG LOG: Update global player state for cross-room visibility
       if (this.globalPlayers.has(playerId)) {
         const globalPlayer = this.globalPlayers.get(playerId);
@@ -333,7 +333,7 @@ class MultiplayerGameServer {
         globalPlayer.y = y;
         globalPlayer.angle = angle;
       }
-      
+
       // Broadcast to ALL clients in main-game room
       socket.to('main-game').emit('player-position-update', {
         playerId,
@@ -343,7 +343,7 @@ class MultiplayerGameServer {
         velocity,
         timestamp: Date.now()
       });
-      
+
       // Log position updates occasionally for debugging
       if (Math.random() < 0.01) { // Only log 1% of position updates
         console.log(`[POS] Player ${playerId} at x=${x.toFixed(1)}, y=${y.toFixed(1)} (broadcast to main-game)`);
@@ -353,7 +353,7 @@ class MultiplayerGameServer {
     socket.on('disconnect', () => {
       const roomId = this.playerRooms.get(socket.id);
       const playerId = this.playerSockets.get(socket.id);
-      
+
       if (roomId) {
         const room = this.rooms.get(roomId);
         if (room) {
@@ -361,16 +361,16 @@ class MultiplayerGameServer {
           // Remove player from game server
           if (playerId) {
             room.server.leave(playerId);
-            
+
             // DEBUG LOG: Remove from global player state
             this.globalPlayers.delete(playerId);
-            
+
             // Notify all clients in main-game room that a player has disconnected
             this.io.to('main-game').emit('player-disconnected', {
               playerId,
               timestamp: Date.now()
             });
-            
+
             console.log(`[DISCONNECT] Removed player ${playerId} from global state and notified main-game`);
           }
           console.log(`👋 Player disconnected from ${roomId} and main-game`);
@@ -384,31 +384,31 @@ class MultiplayerGameServer {
   startGameStateUpdates(socket, room) {
     const roomId = this.playerRooms.get(socket.id);
     if (!roomId) return;
-        // Only create one update interval per room if it doesn't exist already
+    // Only create one update interval per room if it doesn't exist already
     if (!room.updateInterval) {
       console.log(`🔄 Starting game state broadcasts for room ${roomId}`);
-      
+
       // Track last state to avoid sending unchanged states
       room.lastStateSnapshot = null;
-      
+
       room.updateInterval = setInterval(async () => {
         try {
           // Get current game state
           const state = room.server.state;
-          
+
           // Get current active sockets in room
           const socketsInRoom = await this.io.in(roomId).fetchSockets();
-          
+
           if (socketsInRoom.length > 0) {
             // Add debug info to track player counts
             const playerCount = Object.keys(state.players).length;
             const socketCount = socketsInRoom.length;
-            
+
             // Only send updates if we have players
             if (playerCount > 0) {
-                      // Broadcast to all clients in the room
+              // Broadcast to all clients in the room
               this.io.to(roomId).emit('game-state', state);
-              
+
               // Minimal logging only every 30 seconds
               const now = Date.now();
               if (!room.lastDebugLog || now - room.lastDebugLog > 30000) {
@@ -427,7 +427,7 @@ class MultiplayerGameServer {
       try {
         // Check how many sockets are still in the room
         const socketsInRoom = await this.io.in(roomId).fetchSockets();
-        
+
         // Only clear the interval if there are no more sockets in the room
         if (socketsInRoom.length === 0) {
           console.log(`🛑 Stopping game state broadcasts for room ${roomId} - no more players`);
@@ -450,12 +450,12 @@ io.on('connection', (socket) => {
   // Force every new connection to join the global 'main-game' room
   socket.join('main-game');
   console.log(`📌 Socket ${socket.id} joined main-game room`);
-  
+
   // DEBUG LOG: Get current active players from global state (simplified and reliable)
   const getMainRoomPlayers = () => {
     try {
       const playerData = [];
-      
+
       // Use global player state for reliable cross-room player data
       gameServer.globalPlayers.forEach((player, playerId) => {
         playerData.push({
@@ -467,7 +467,7 @@ io.on('connection', (socket) => {
           score: player.score || 0
         });
       });
-      
+
       // Only send if there are actually players to send (avoid empty updates)
       if (playerData.length > 0) {
         // Send the list of existing players to the new connection
@@ -476,14 +476,14 @@ io.on('connection', (socket) => {
           timestamp: Date.now()
         });
       }
-    } catch(error) {
+    } catch (error) {
       console.error('Error getting main room players:', error);
     }
   };
-  
+
   // Send existing players to the new connection
   getMainRoomPlayers();
-  
+
   // Handle connection with regular game mechanics
   gameServer.handleConnection(socket);
 });
@@ -492,20 +492,23 @@ io.on('connection', (socket) => {
 // Default to 3002 for local development
 const PORT = process.env.PORT || 3002;
 const HOST = '0.0.0.0'; // Bind to all network interfaces for VPS
+const DOMAIN = process.env.DOMAIN || 'spermiobeta.xyz';
 
 httpServer.listen(PORT, HOST, () => {
   console.log(`🎮 Multiplayer game server running on ${HOST}:${PORT}`);
-  
+
   // VPS deployment detection
   if (process.env.NODE_ENV === 'production') {
     console.log(`🚀 Production environment detected`);
-    console.log(`🌐 VPS URL: https://your-domain.com`);
-    console.log(`🔒 WebSocket endpoint: wss://your-domain.com`);
+    console.log(`🌐 Domain: ${DOMAIN}`);
+    console.log(`🌐 Game Server URL: https://game.${DOMAIN}`);
+    console.log(`🔒 WebSocket endpoint: wss://game.${DOMAIN}`);
+    console.log(`📋 CORS Origins: ${ALLOWED_ORIGINS.join(', ')}`);
   } else {
     console.log(`🌐 Local WebSocket endpoint: ws://localhost:${PORT}`);
   }
-  
-  console.log(`🌍 Health endpoint: /health`);
+
+  console.log(`🌍 Health endpoint: http://${HOST}:${PORT}/health`);
   console.log(`🔗 Ready for multiplayer connections!`);
 });
 

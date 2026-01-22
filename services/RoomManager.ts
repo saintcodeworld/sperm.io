@@ -2,6 +2,32 @@ import { Room, ROOM_CONFIGS, GameState } from '../types';
 import { wsClient } from './WebSocketClient';
 import { DeathEvent, KillEvent, ServerSim } from './ServerSim';
 
+// Smart URL detection for game server (consistent with WebSocketClient)
+const getGameServerUrl = (): string => {
+  // If explicitly configured via build env, use that
+  if (import.meta.env.VITE_GAME_SERVER_URL) {
+    return import.meta.env.VITE_GAME_SERVER_URL;
+  }
+
+  // Check if we're in a browser environment
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    const protocol = window.location.protocol;
+
+    // Production detection
+    const isProduction = protocol === 'https:' ||
+      hostname === 'spermiobeta.xyz' ||
+      hostname === 'www.spermiobeta.xyz' ||
+      hostname.endsWith('.spermiobeta.xyz');
+
+    if (isProduction) {
+      return 'https://game.spermiobeta.xyz';
+    }
+  }
+
+  return 'http://localhost:3002';
+};
+
 class RoomManager {
   private rooms: Map<string, Room> = new Map();
   private gameServerUrl: string | undefined;
@@ -10,10 +36,11 @@ class RoomManager {
   private singlePlayerServers: Map<string, ServerSim> = new Map();
 
   constructor() {
-    // Always use fallback URL if environment variable is missing
-    this.gameServerUrl = import.meta.env.VITE_GAME_SERVER_URL || 'http://localhost:3002';
+    // Use smart URL detection
+    this.gameServerUrl = getGameServerUrl();
     this.initializeRooms();
   }
+
 
   private initializeRooms() {
     ROOM_CONFIGS.forEach((config) => {
@@ -30,7 +57,7 @@ class RoomManager {
 
   async connectToGameServer(): Promise<boolean> {
     console.log('[RoomManager] Attempting to connect to Multiplayer server...');
-    
+
     // First disconnect any existing connection to ensure clean state
     if (wsClient.isConnected()) {
       console.log('[RoomManager] Disconnecting existing WebSocket connection...');
@@ -39,7 +66,7 @@ class RoomManager {
       // Small delay to ensure clean disconnect
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-    
+
     try {
       await wsClient.connect(this.gameServerUrl);
       this.connected = true;
@@ -65,13 +92,13 @@ class RoomManager {
     if (!actuallyConnected) {
       console.log('[RoomManager] WebSocket not connected, attempting to connect...');
       this.connected = false;
-      
+
       try {
         await this.connectToGameServer();
       } catch (error) {
         console.log('[RoomManager] Connection attempt failed');
       }
-      
+
       // If still not connected, use single player mode
       if (!this.connected) {
         console.log('🎮 Multiplayer server not available - starting in single-player mode');
@@ -95,7 +122,7 @@ class RoomManager {
     // Get the room's entry fee for the server
     const room = this.rooms.get(roomId);
     const entryFee = room?.entryFee ?? 0;
-    
+
     // If not connected to multiplayer, return single-player server simulation
     if (!this.connected) {
       // Check if we already have a cached server for this room
@@ -107,16 +134,16 @@ class RoomManager {
       } else {
         console.log(`🎮 Reusing existing single-player server for room ${roomId}`);
       }
-      
+
       return singlePlayerServer;
     }
-    
+
     // Return WebSocket client interface that mimics ServerSim
     // Track local state for multiplayer mode
     let localGameState: GameState = { players: {}, food: {} };
     let cashoutStartTime: number | null = null;
     let playerJoinTime: number = Date.now();
-    
+
     return {
       join: async (id: string, name: string, entryFeeAmount: number): Promise<boolean> => {
         // For WebSocket mode, join is handled via wsClient.joinRoom (already called by roomManager.joinRoom)
@@ -165,7 +192,7 @@ class RoomManager {
         // For multiplayer mode, cashout is handled server-side
         // Single-player mode uses ServerSim which has this callback
         // Return no-op cleanup function for multiplayer
-        return () => {};
+        return () => { };
       }
     };
   }

@@ -3,9 +3,43 @@ import { GameState } from '../types';
 import { DeathEvent, KillEvent } from './ServerSim';
 
 // WebSocket URL for multiplayer server
-const SOCKET_URL = import.meta.env.VITE_GAME_SERVER_URL || 'http://localhost:3002';
+// Priority:
+// 1. VITE_GAME_SERVER_URL env variable (set at build time)
+// 2. Auto-detect based on current domain (production fallback)
+// 3. localhost:3002 (development fallback)
+const getSocketUrl = (): string => {
+  // If explicitly configured via build env, use that
+  if (import.meta.env.VITE_GAME_SERVER_URL) {
+    return import.meta.env.VITE_GAME_SERVER_URL;
+  }
+  
+  // Check if we're in a browser environment
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    const protocol = window.location.protocol;
+    
+    // Production detection: if we're on HTTPS or a known production domain
+    const isProduction = protocol === 'https:' || 
+      hostname === 'spermiobeta.xyz' || 
+      hostname === 'www.spermiobeta.xyz' ||
+      hostname.endsWith('.spermiobeta.xyz');
+    
+    if (isProduction) {
+      // Use the production game server URL
+      // This handles Coolify deployments where VITE_GAME_SERVER_URL wasn't set at build time
+      console.log('🌐 Production environment detected, using game.spermiobeta.xyz');
+      return 'https://game.spermiobeta.xyz';
+    }
+  }
+  
+  // Default to localhost for development
+  return 'http://localhost:3002';
+};
+
+const SOCKET_URL = getSocketUrl();
 
 console.log('DEBUG: Configured WebSocket URL:', SOCKET_URL);
+console.log('DEBUG: VITE_GAME_SERVER_URL from env:', import.meta.env.VITE_GAME_SERVER_URL || '(not set)');
 
 export class WebSocketClient {
   private socket: Socket | null = null;
