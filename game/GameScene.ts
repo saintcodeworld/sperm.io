@@ -170,6 +170,18 @@ export default class GameScene extends Phaser.Scene {
 
   // Set up all network synchronization listeners
   private setupNetworkListeners() {
+    // Listen for player-death events from the server
+    const playerDeathCleanup = wsClient.onPlayerDeath((event) => {
+      console.log(`[GameScene] Received player-death event:`, event);
+      if (event.id === this.myId) {
+        // This is our player dying
+        this.triggerDeathSequence(event);
+      } else {
+        // Another player died - remove them from our view
+        this.handlePlayerDisconnected({ playerId: event.id });
+      }
+    });
+    this.signalCleanups.push(playerDeathCleanup);
     // Listen for existing players when joining the game
     const existingPlayersCleanup = wsClient.onExistingPlayers((data) => {
       // Create a Set of known player IDs to prevent duplicates
@@ -703,43 +715,24 @@ export default class GameScene extends Phaser.Scene {
   }
 
   private handleStateUpdate(state: GameState) {
-    Object.entries(state.players).forEach(([id, pData]) => {
-      // Handle local player
-      if (id === this.myId) {
-        let localPlayer = this.players.get(id);
-        // Create local player sprite if it doesn't exist yet
-        if (!localPlayer) {
-          localPlayer = new Sperm(this, pData);
-          this.players.set(id, localPlayer);
-          // Set camera to follow the local player
-          this.cameras.main.startFollow(localPlayer.getHead(), true, 0.1, 0.1);
-        }
-        this.lastSolValue = pData.solValue;
-        // Update score and other non-position properties (not position - that's client controlled)
-        localPlayer.updateNonPosition(pData);
-        return;
-      }
+    // IMPORTANT: Only handle LOCAL player from state updates
+    // Other players are handled EXCLUSIVELY via network events (otherPlayers map)
+    // This prevents duplicate rendering
 
-      // Handle other players
-      let sperm = this.players.get(id);
-      if (!sperm) {
-        sperm = new Sperm(this, pData);
-        this.players.set(id, sperm);
+    const myPlayerData = state.players[this.myId];
+    if (myPlayerData) {
+      let localPlayer = this.players.get(this.myId);
+      // Create local player sprite if it doesn't exist yet
+      if (!localPlayer) {
+        localPlayer = new Sperm(this, myPlayerData);
+        this.players.set(this.myId, localPlayer);
+        // Set camera to follow the local player
+        this.cameras.main.startFollow(localPlayer.getHead(), true, 0.1, 0.1);
       }
-      sperm.update(pData);
-    });
-
-    this.players.forEach((_, id) => {
-      if (!state.players[id]) {
-        // DEBUG LOG: Don't destroy local player via state update - let proper exit sequence handle it
-        if (id === this.myId) {
-          console.log(`[GameScene] Player ${id} removed from server state but NOT destroying sprite (waiting for proper exit)`);
-          return; // Don't destroy local player - cashout/death callbacks will handle this
-        }
-        this.players.get(id)?.destroy();
-        this.players.delete(id);
-      }
-    });
+      this.lastSolValue = myPlayerData.solValue;
+      // Update score and other non-position properties (not position - that's client controlled)
+      localPlayer.updateNonPosition(myPlayerData);
+    }
 
     Object.entries(state.food).forEach(([id, fData]) => {
       if (!this.foods.has(id)) {

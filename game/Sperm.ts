@@ -13,11 +13,11 @@ export class Sperm {
   private nameText: Phaser.GameObjects.Text;
   private id: string;
   private color: number;
-  
+
   // Local segment tracking for client-controlled movement
   private localSegments: { x: number; y: number }[] = [];
   private isLocalPlayer: boolean = false;
-  
+
   public getColor(): number {
     return this.color;
   }
@@ -30,10 +30,10 @@ export class Sperm {
     // Head - Realistic sperm head (oval shape)
     this.head = scene.add.ellipse(data.pos.x, data.pos.y, 28, 20, this.color);
     this.head.setStrokeStyle(2, 0xffffff, 0.6);
-    
+
     // Tail graphics
     this.tailGraphics = scene.add.graphics();
-    
+
     // Name label
     this.nameText = scene.add.text(data.pos.x, data.pos.y - 28, data.name, {
       fontSize: '12px',
@@ -61,7 +61,7 @@ export class Sperm {
     this.tailGraphics.setDepth(5);
     this.head.setDepth(10);
     this.nameText.setDepth(15);
-    
+
     // Draw initial tail
     this.drawTail();
   }
@@ -74,22 +74,22 @@ export class Sperm {
   // Draw the tail/trail based on segments
   private drawTail(): void {
     this.tailGraphics.clear();
-    
+
     if (this.localSegments.length < 2) return;
-    
+
     const baseWidth = 12;
     const segmentCount = this.localSegments.length;
-    
+
     // Draw tail as connected line segments with tapering
     for (let i = 1; i < segmentCount; i++) {
       const seg = this.localSegments[i];
       const prevSeg = this.localSegments[i - 1];
-      
+
       // Calculate tapering - thinner towards the end
       const progress = i / segmentCount;
       const thickness = Math.max(2, baseWidth * (1 - progress * 0.85));
       const alpha = 0.9 * (1 - progress * 0.7);
-      
+
       this.tailGraphics.lineStyle(thickness, this.color, alpha);
       this.tailGraphics.beginPath();
       this.tailGraphics.moveTo(prevSeg.x, prevSeg.y);
@@ -101,26 +101,26 @@ export class Sperm {
   // Update segments to follow the head position (for local player)
   public updateLocalSegments(): void {
     if (this.localSegments.length === 0) return;
-    
+
     // First segment follows the head
     this.localSegments[0] = { x: this.head.x, y: this.head.y };
-    
+
     // Each subsequent segment follows the one before it
     for (let i = 1; i < this.localSegments.length; i++) {
       const seg = this.localSegments[i];
       const prev = this.localSegments[i - 1];
       const dist = Math.hypot(prev.x - seg.x, prev.y - seg.y);
-      
+
       if (dist > LOCAL_SEGMENT_DISTANCE) {
         const angle = Math.atan2(prev.y - seg.y, prev.x - seg.x);
         seg.x = prev.x - Math.cos(angle) * LOCAL_SEGMENT_DISTANCE;
         seg.y = prev.y - Math.sin(angle) * LOCAL_SEGMENT_DISTANCE;
       }
     }
-    
+
     // Update name position above head
     this.nameText.setPosition(this.head.x, this.head.y - 28);
-    
+
     // Redraw the tail
     this.drawTail();
   }
@@ -134,22 +134,39 @@ export class Sperm {
     this.head.setPosition(data.pos.x, data.pos.y);
     this.head.setRotation(data.angle);
     this.nameText.setPosition(data.pos.x, data.pos.y - 28);
-    
+    this.nameText.setText(`${data.name} (${(data.solValue || 0).toFixed(2)} SOL)`);
+
     // Update segments from server data (for other players)
     if (data.segments && data.segments.length > 0) {
-      this.localSegments = data.segments.map(s => ({ x: s.x, y: s.y }));
+      // Use server segments directly, but limit to prevent explosion
+      const maxSegments = Math.min(data.segments.length, 60);
+      this.localSegments = data.segments.slice(0, maxSegments).map(s => ({ x: s.x, y: s.y }));
     } else {
-      // If no segments provided, update locally
-      this.updateLocalSegments();
+      // No segments provided - just update local segments based on head movement
+      // DON'T regenerate segments every frame, just update positions
+      if (this.localSegments.length > 0) {
+        this.localSegments[0] = { x: data.pos.x, y: data.pos.y };
+        // Update following segments
+        for (let i = 1; i < this.localSegments.length; i++) {
+          const seg = this.localSegments[i];
+          const prev = this.localSegments[i - 1];
+          const dist = Math.hypot(prev.x - seg.x, prev.y - seg.y);
+          if (dist > LOCAL_SEGMENT_DISTANCE) {
+            const angle = Math.atan2(prev.y - seg.y, prev.x - seg.x);
+            seg.x = prev.x - Math.cos(angle) * LOCAL_SEGMENT_DISTANCE;
+            seg.y = prev.y - Math.sin(angle) * LOCAL_SEGMENT_DISTANCE;
+          }
+        }
+      }
     }
-    
+
     // Visual feedback for high-value targets
     if (data.solValue > 0.15) {
       this.head.setStrokeStyle(3, 0xffffff, 0.9);
     } else {
       this.head.setStrokeStyle(2, 0xffffff, 0.6);
     }
-    
+
     // Draw the tail
     this.drawTail();
   }
@@ -170,14 +187,14 @@ export class Sperm {
     if (data.solValue !== undefined) {
       this.nameText.setText(`${data.name} (${data.solValue.toFixed(2)} SOL)`);
     }
-    
+
     // Visual feedback for value
     if (data.solValue > 0.15) {
       this.head.setStrokeStyle(3, 0xffffff, 0.9);
     } else {
       this.head.setStrokeStyle(2, 0xffffff, 0.6);
     }
-    
+
     // Sync segments from server if available (for hitbox accuracy)
     if (data.segments && data.segments.length > 0) {
       // Only sync length, not positions (local player controls position)
@@ -186,7 +203,7 @@ export class Sperm {
         this.localSegments.push({ ...lastSeg });
       }
     }
-    
+
     // Update segments to follow head and redraw tail
     this.updateLocalSegments();
   }
