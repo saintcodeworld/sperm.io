@@ -751,6 +751,7 @@ export default class GameScene extends Phaser.Scene {
         }
       });
     }
+  }
 
   private handleStateUpdate(state: GameState) {
     // IMPORTANT: Only handle LOCAL player from state updates
