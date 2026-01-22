@@ -5,15 +5,6 @@ import { GameState, ARENA_SIZE, PlayerData } from '../types';
 import { Sperm } from './Sperm';
 import { wsClient } from '../services/WebSocketClient'; // Import WebSocket client for network players
 
-interface PlayerInput {
-  timestamp: number;
-  angle: number;
-  boost: boolean;
-  dt: number;
-}
-
-
-
 export default class GameScene extends Phaser.Scene {
   public declare add: Phaser.GameObjects.GameObjectFactory;
   public declare cameras: Phaser.Cameras.Scene2D.CameraManager;
@@ -48,9 +39,6 @@ export default class GameScene extends Phaser.Scene {
   private lastPositionSentTime: number = 0; // For throttling position updates
   private fpsText!: Phaser.GameObjects.Text; // FPS counter display
   private cashoutStartTime?: number; // Track when cashout started for progress calculation
-
-  private inputHistory: PlayerInput[] = [];
-  private readonly RECONCILIATION_THRESHOLD = 20; // px discrepancy needed to trigger correction
 
   constructor() {
     super('GameScene');
@@ -595,36 +583,29 @@ export default class GameScene extends Phaser.Scene {
       const dx = Math.cos(head.rotation) * speed;
       const dy = Math.sin(head.rotation) * speed;
 
-      // Update local position - client authority (prediction)
+      // Update local position - client authority
       head.x += dx;
       head.y += dy;
 
       // Define angle for network updates (use current actual rotation)
       const angle = head.rotation;
 
-      // Store input for reconciliation
-      // Note: Phaser's delta is in ms, we often use seconds for physics, 
-      // but here we used raw movement per frame (speed). 
-      // Ideally we should use dt. Let's assume fixed step for now or capture frame delta.
-      const dt = this.game.loop.delta;
-      this.inputHistory.push({
-        timestamp: Date.now(),
-        angle: angle, // The angle we MOVED at (or head.rotation)
-        boost: this.isBoosting && !this.isCashingOut,
-        dt: 1 // Since we moved by 'speed' pixels per frame, dt is effectively 1 frame unit
-        // Unless we want to be precise with time-based movement, 
-        // but current logic is per-frame `speed`.
-        // To support replay, we need to know how much we moved.
-        // Movement was: dx, dy. 
-        // dx = cos(angle) * speed. speed = boost ? 6 : 4.
-      });
+      // Only validate against server position if deviation is extreme
+      const serverPos = this.server?.getPlayerData(this.myId)?.pos;
+      if (serverPos) {
+        const dist = Phaser.Math.Distance.Between(
+          head.x,
+          head.y,
+          serverPos.x,
+          serverPos.y
+        );
 
-      // Keep history manageable
-      if (this.inputHistory.length > 600) { // ~10 seconds @ 60fps
-        this.inputHistory.shift();
+        // Only snap if deviation is huge (200px)
+        if (dist > 200) {
+          head.x = serverPos.x;
+          head.y = serverPos.y;
+        }
       }
-
-      // REMOVED OLD SNAP LOGIC HERE - Reconciliation is now handled in handleStateUpdate
 
       // CLIENT-SIDE BOUNDARY DEATH - immediate death when touching red line
       const BOUNDARY_DEATH_MARGIN = 10;
@@ -800,46 +781,6 @@ export default class GameScene extends Phaser.Scene {
         // Set camera to follow the local player
         this.cameras.main.startFollow(localPlayer.getHead(), true, 0.1, 0.1);
       }
-
-      // SERVER RECONCILIATION
-      const serverPos = myPlayerData.pos;
-      if (localPlayer) {
-        const head = localPlayer.getHead();
-
-        // 1. Find the input that corresponds to this server timestamp (approximate)
-        // The server timestamp is likely mostly accurate if NTP synced, or we just trust it.
-        // Inputs older than this timestamp are "acknowledged".
-        // Using a small buffer time (e.g., latency/2) might be needed.
-        const serverTime = (state as any).timestamp || Date.now();
-
-        // Remove inputs processed by server
-        this.inputHistory = this.inputHistory.filter(input => input.timestamp > serverTime);
-
-        // 2. Check deviation
-        // To check deviation correctly, we would need to know where we WERE at serverTime.
-        // But creating a full rewind/replay system is heavy.
-        // Simplified Approach: 
-        // Current Local Pos should equal Server Pos + (Accumulated Movement of Unacknowledged Inputs).
-
-        let predictedPos = { x: serverPos.x, y: serverPos.y };
-
-        this.inputHistory.forEach(input => {
-          const speed = input.boost ? 6 : 4;
-          predictedPos.x += Math.cos(input.angle) * speed;
-          predictedPos.y += Math.sin(input.angle) * speed;
-        });
-
-        const dist = Phaser.Math.Distance.Between(head.x, head.y, predictedPos.x, predictedPos.y);
-
-        // 3. Correction
-        if (dist > this.RECONCILIATION_THRESHOLD) {
-          console.log(`[Reconcile] Deviation ${dist.toFixed(1)}px > ${this.RECONCILIATION_THRESHOLD}px. Correcting...`);
-          // Soft correction (snap physics, lerp visual if we separated them, but for now snap)
-          head.x = predictedPos.x;
-          head.y = predictedPos.y;
-        }
-      }
-
       this.lastSolValue = myPlayerData.solValue;
       // Update score and other non-position properties (not position - that's client controlled)
       localPlayer.updateNonPosition(myPlayerData);
