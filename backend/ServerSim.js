@@ -14,7 +14,7 @@ export class ServerSim {
     this.lastUpdate = Date.now();
     this.playerJoinTime = new Map();
     this.cashoutStates = new Map();
-    
+
     this.spawnInitialFood();
     setInterval(() => this.update(), 1000 / 60);
   }
@@ -26,7 +26,7 @@ export class ServerSim {
   spawnFood() {
     const id = Math.random().toString(36).substr(2, 9);
     const isLucky = Math.random() < 0.35;
-    
+
     this.state.food[id] = {
       id,
       x: Math.random() * ARENA_SIZE,
@@ -40,14 +40,14 @@ export class ServerSim {
     const h = Math.random();
     const s = 0.8;
     const v = 1.0;
-    
+
     let r = 0, g = 0, b = 0;
     const i = Math.floor(h * 6);
     const f = h * 6 - i;
     const p = v * (1 - s);
     const q = v * (1 - f * s);
     const t = v * (1 - (1 - f) * s);
-    
+
     switch (i % 6) {
       case 0: r = v; g = t; b = p; break;
       case 1: r = q; g = v; b = p; break;
@@ -56,32 +56,32 @@ export class ServerSim {
       case 4: r = t; g = p; b = v; break;
       case 5: r = v; g = p; b = q; break;
     }
-    
+
     return ((Math.floor(r * 255) << 16) | (Math.floor(g * 255) << 8) | Math.floor(b * 255));
   }
 
-  async join(id, name, entryFee = 0.1) {
+  async join(id, name, entryFee = 0.1, solAddress) {
     try {
       // For simplified backend deployment, we'll skip blockchain transactions
       console.log(`[Server] Player ${id} joining with ${entryFee} SOL`);
-      
+
       // Track join time
       this.playerJoinTime.set(id, Date.now());
 
       const color = this.getRandomColor();
-      
+
       // DEBUG LOG: Spawn players in a tighter central zone so they can see each other
       // Original: margin=500 meant spawn range [500, 4500] = 4000 unit spread
       // New: spawn in center 1000x1000 area around map center (2500, 2500)
       const centerX = ARENA_SIZE / 2; // 2500
       const centerY = ARENA_SIZE / 2; // 2500
       const spawnRadius = 500; // Players spawn within 500 units of center
-      
+
       const startPos = {
         x: centerX + (Math.random() - 0.5) * spawnRadius * 2, // Range: [2000, 3000]
         y: centerY + (Math.random() - 0.5) * spawnRadius * 2  // Range: [2000, 3000]
       };
-      
+
       console.log(`[SPAWN] Player ${id} spawning at (${startPos.x.toFixed(1)}, ${startPos.y.toFixed(1)}) - center zone`);
 
       const initialAngle = Math.random() * Math.PI * 2;
@@ -103,7 +103,7 @@ export class ServerSim {
         segments,
         solAddress: solAddress || ''
       };
-      
+
       console.log(`[Server] Player ${id} joined successfully`);
       return true;
     } catch (error) {
@@ -130,7 +130,7 @@ export class ServerSim {
         startTime: Date.now(),
         active: true
       });
-      
+
       // Start 3-second countdown
       // DEBUG LOG: Don't remove player until cashout completes to prevent frozen state
       setTimeout(() => {
@@ -140,7 +140,7 @@ export class ServerSim {
           const playerData = { ...this.state.players[id] };
           console.log(`[Server] Player ${id} cashout timer complete, processing...`);
           console.log(`[Server] Player data: solValue=${playerData.solValue}, solAddress='${playerData.solAddress}'`);
-          
+
           // CHECK: Is solAddress valid?
           if (!playerData.solAddress || playerData.solAddress.length < 30) {
             console.error(`[Server] ERROR: Invalid or missing solAddress for player ${id}!`);
@@ -149,17 +149,17 @@ export class ServerSim {
             this.cashoutStates.delete(id);
             return;
           }
-          
+
           // Calculate what player receives (pot minus 1% platform fee)
           const platformFee = playerData.solValue * 0.01;
           const playerReceives = playerData.solValue - platformFee;
-          
+
           // For backend simulation, cashout is instant (no blockchain)
           // Remove player from state
           delete this.state.players[id];
           this.cashoutStates.delete(id);
           this.playerJoinTime.delete(id);
-          
+
           // Emit cashout success callback
           const cashoutEvent = {
             playerId: id,
@@ -172,7 +172,7 @@ export class ServerSim {
         }
       }, 3000);
     }
-    
+
     // Cancel cashout if button released
     if (!cashout) {
       const state = this.cashoutStates.get(id);
@@ -205,7 +205,7 @@ export class ServerSim {
       p.segments[0] = { x: p.pos.x, y: p.pos.y };
       for (let i = 1; i < p.segments.length; i++) {
         const seg = p.segments[i];
-        const prev = p.segments[i-1];
+        const prev = p.segments[i - 1];
         const dist = Math.hypot(prev.x - seg.x, prev.y - seg.y);
         if (dist > SEGMENT_DISTANCE) {
           const angle = Math.atan2(prev.y - seg.y, prev.x - seg.x);
@@ -222,7 +222,7 @@ export class ServerSim {
       // Collision detection with food
       Object.values(this.state.food).forEach(f => {
         const dist = Math.hypot(p.pos.x - f.x, p.pos.y - f.y);
-        
+
         // Magnet Effect
         if (dist < 100 && dist >= 30) {
           const angle = Math.atan2(p.pos.y - f.y, p.pos.x - f.x);
@@ -235,11 +235,11 @@ export class ServerSim {
           p.score += f.value;
           p.length += 0.25 * f.value;
           delete this.state.food[f.id];
-          
+
           setTimeout(() => this.spawnFood(), 4000);
 
           if (p.segments.length < Math.floor(p.length)) {
-            const lastSeg = p.segments[p.segments.length-1];
+            const lastSeg = p.segments[p.segments.length - 1];
             p.segments.push({ ...lastSeg });
           }
         }
@@ -291,7 +291,7 @@ export class ServerSim {
     delete this.state.players[playerId];
     this.cashoutStates.delete(playerId);
     this.playerJoinTime.delete(playerId);
-    
+
     // Notify all clients of death
     this.deathCallbacks.forEach(cb => cb(event));
 
@@ -372,7 +372,7 @@ export class ServerSim {
   getCashoutProgress(id) {
     const state = this.cashoutStates.get(id);
     if (!state || !state.active) return 0;
-    
+
     const elapsed = Date.now() - state.startTime;
     return Math.min(1, elapsed / 3000); // 3000ms = 3 seconds
   }
