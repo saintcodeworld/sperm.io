@@ -441,7 +441,7 @@ class AuthService {
         provider: 'twitter',
         options: {
           redirectTo: 'https://spermiobeta.xyz',
-          scopes: 'users.read tweet.read offline.access',
+          scopes: 'users.read tweet.read offline.access users.email',
           skipBrowserRedirect: false,
         },
       });
