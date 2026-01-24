@@ -440,8 +440,8 @@ class AuthService {
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'x' as any,
         options: {
-          redirectTo: 'https://mjsqomffhxfhnfmklfyl.supabase.co/auth/v1/callback',
-          scopes: 'tweet.read tweet.write users.read offline.access'
+          redirectTo: 'https://mjsqomffhxfhfmmklfyl.supabase.co/auth/v1/callback',
+          scopes: 'users.read tweet.read offline.access'
         }
       });
 
