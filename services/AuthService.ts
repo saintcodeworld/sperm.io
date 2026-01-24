@@ -438,10 +438,9 @@ class AuthService {
     try {
       console.log('[Auth] Initiating Twitter OAuth sign in...');
       const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'x' as any,
+        provider: 'google',
         options: {
-          redirectTo: window.location.origin,
-          scopes: 'users.read'
+          redirectTo: window.location.origin
         }
       });
 
@@ -473,7 +472,7 @@ class AuthService {
       }
 
       const userId = session.user.id;
-      const twitterUsername = session.user.user_metadata?.user_name || 'twitter_user';
+      const twitterUsername = session.user.user_metadata?.full_name || session.user.user_metadata?.name || 'google_user';
       
       console.log(`[Auth] Twitter user authenticated: ${userId}, username: ${twitterUsername}`);
 
