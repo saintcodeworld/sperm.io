@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Phaser from 'phaser';
 import { getGameConfig } from './game/GameConfig';
 import { GameUI } from './components/GameUI';
@@ -15,6 +16,8 @@ import { solanaService } from './services/SolanaService';
 import { gameTransactionService } from './services/GameTransactionService';
 import { gameHistoryService } from './services/GameHistoryService';
 import { UserAccount, CashoutEvent } from './types';
+import { TermsPage } from './pages/TermsPage';
+import { PrivacyPage } from './pages/PrivacyPage';
 
 type AppState = 'AUTH' | 'DASHBOARD' | 'STAKE_SELECTION' | 'PLAYING' | 'GAMEOVER' | 'CASHOUT_SUCCESS' | 'ADMIN';
 
@@ -421,116 +424,124 @@ const App: React.FC = () => {
   if (gameState === 'ADMIN') return <AdminWallets />;
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#050505]">
-      {/* Debug Info - only visible in development */}
-      {import.meta.env.DEV && (
-        <div className="absolute top-0 left-0 bg-red-500 text-white p-2 z-[999] text-xs">
-          DEBUG: gameState={gameState}, user={currentUser?.username || 'null'}
-        </div>
-      )}
-
-      {/* Transaction Loading UI */}
-      <TransactionLoading
-        isVisible={isTransactionLoading}
-        message={transactionMessage}
-        transactionSignature={transactionSignature}
-      />
-
-      {dbStatus && gameState !== 'PLAYING' && (
-        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-full border text-[10px] font-black uppercase tracking-widest flex items-center gap-2 backdrop-blur-md transition-all duration-500 animate-in slide-in-from-top-4 ${dbStatus.connected ? 'bg-green-500/10 border-green-500/30 text-green-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
-          <div className={`w-1.5 h-1.5 rounded-full ${dbStatus.connected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]' : 'bg-red-500 animate-pulse'}`}></div>
-          {dbStatus.message}
-        </div>
-      )}
-
-      {gameState === 'AUTH' && <Auth onAuth={handleAuthSuccess} />}
-      {gameState === 'DASHBOARD' && currentUser && (
-        <Dashboard user={currentUser} onPlay={handleProceedToStake} onLogout={handleLogout} onBalanceChange={syncUser} />
-      )}
-      {gameState === 'STAKE_SELECTION' && currentUser && (
-        <StakeSelector
-          balance={currentUser.balance}
-          onConfirm={handleStartGame}
-          onCancel={handleBackToMenu}
-        />
-      )}
-
-      {(gameState === 'GAMEOVER' || gameState === 'CASHOUT_SUCCESS') && (
-        <div className="flex flex-col items-center justify-center h-full z-50">
-          <div className="bg-black/90 p-12 rounded-[2.5rem] border border-white/10 shadow-2xl backdrop-blur-3xl max-w-lg w-full text-center space-y-8 animate-in fade-in zoom-in duration-300">
-            {gameState === 'GAMEOVER' ? (
-              <>
-                <h2 className="text-5xl font-black text-red-500 uppercase italic tracking-tighter text-glow-red">Terminated</h2>
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-500 uppercase tracking-widest font-bold">Casualty Report</p>
-                  <p className="text-white text-lg font-bold">Killed by: <span className="text-red-400">{deathData?.killedBy}</span></p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center mx-auto border border-green-500/40">
-                  <svg className="w-10 h-10 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
-                </div>
-                <h2 className="text-5xl font-black text-green-500 uppercase italic tracking-tighter text-glow-green">Cashed Out</h2>
-                <p className="text-gray-400 font-medium">Cash out complete.</p>
-              </>
+    <Router>
+      <Routes>
+        <Route path="/terms" element={<TermsPage />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
+        <Route path="*" element={
+          <div className="relative w-screen h-screen overflow-hidden bg-[#050505]">
+            {/* Debug Info - only visible in development */}
+            {import.meta.env.DEV && (
+              <div className="absolute top-0 left-0 bg-red-500 text-white p-2 z-[999] text-xs">
+                DEBUG: gameState={gameState}, user={currentUser?.username || 'null'}
+              </div>
             )}
 
-            <div className="grid grid-cols-2 gap-4 py-8 border-y border-white/5">
-              <div className="text-center">
-                <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mb-1">Final Length</p>
-                <p className="text-3xl font-mono text-white">{Math.floor(deathData?.length || 0)}</p>
-              </div>
-              <div className="text-center">
-                <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mb-1">
-                  {gameState === 'GAMEOVER' ? 'Pot Lost' : 'Total Cash Out'}
-                </p>
-                {gameState === 'CASHOUT_SUCCESS' ? (
-                  <div className="space-y-1">
-                    <p className="text-xs text-gray-400 line-through">
-                      Pot: {totalPotAmount.toFixed(4)} SOL
-                    </p>
-                    <p className="text-3xl font-mono text-green-400">
-                      +{lastEarnings.toFixed(4)} <span className="text-xs">SOL</span>
-                    </p>
-                    <p className="text-[8px] text-yellow-400">
-                      Fees: {(totalPotAmount - lastEarnings).toFixed(4)} SOL deducted
-                    </p>
-                  </div>
-                ) : (
-                  <p className={`text-3xl font-mono ${gameState === 'GAMEOVER' ? 'text-red-400' : 'text-green-400'}`}>
-                    {gameState === 'GAMEOVER' ? '-' : '+'}{lastEarnings.toFixed(4)} <span className="text-xs">SOL</span>
-                  </p>
-                )}
-                {gameState === 'CASHOUT_SUCCESS' && (
-                  <div className="space-y-2 mt-2">
-                    <p className="text-[8px] text-gray-500 uppercase font-bold">Fees Applied:</p>
-                    <p className="text-[8px] text-gray-400">• 3% Entry Platform Fee</p>
-                    <p className="text-[8px] text-gray-400">• 1% Cashout Platform Fee</p>
-                    <p className="text-[8px] text-gray-400">• Network Gas Fees</p>
-                  </div>
-                )}
-              </div>
-            </div>
+            {/* Transaction Loading UI */}
+            <TransactionLoading
+              isVisible={isTransactionLoading}
+              message={transactionMessage}
+              transactionSignature={transactionSignature}
+            />
 
-            <button
-              onClick={handleBackToMenu}
-              className="w-full bg-white text-black font-black py-5 rounded-2xl uppercase tracking-widest hover:bg-blue-500 hover:text-white transition-all transform active:scale-95 shadow-xl text-lg"
-            >
-              Back to Dashboard
-            </button>
+            {dbStatus && gameState !== 'PLAYING' && (
+              <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-full border text-[10px] font-black uppercase tracking-widest flex items-center gap-2 backdrop-blur-md transition-all duration-500 animate-in slide-in-from-top-4 ${dbStatus.connected ? 'bg-green-500/10 border-green-500/30 text-green-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
+                <div className={`w-1.5 h-1.5 rounded-full ${dbStatus.connected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]' : 'bg-red-500 animate-pulse'}`}></div>
+                {dbStatus.message}
+              </div>
+            )}
+
+            {gameState === 'AUTH' && <Auth onAuth={handleAuthSuccess} />}
+            {gameState === 'DASHBOARD' && currentUser && (
+              <Dashboard user={currentUser} onPlay={handleProceedToStake} onLogout={handleLogout} onBalanceChange={syncUser} />
+            )}
+            {gameState === 'STAKE_SELECTION' && currentUser && (
+              <StakeSelector
+                balance={currentUser.balance}
+                onConfirm={handleStartGame}
+                onCancel={handleBackToMenu}
+              />
+            )}
+
+            {(gameState === 'GAMEOVER' || gameState === 'CASHOUT_SUCCESS') && (
+              <div className="flex flex-col items-center justify-center h-full z-50">
+                <div className="bg-black/90 p-12 rounded-[2.5rem] border border-white/10 shadow-2xl backdrop-blur-3xl max-w-lg w-full text-center space-y-8 animate-in fade-in zoom-in duration-300">
+                  {gameState === 'GAMEOVER' ? (
+                    <>
+                      <h2 className="text-5xl font-black text-red-500 uppercase italic tracking-tighter text-glow-red">Terminated</h2>
+                      <div className="space-y-1">
+                        <p className="text-xs text-gray-500 uppercase tracking-widest font-bold">Casualty Report</p>
+                        <p className="text-white text-lg font-bold">Killed by: <span className="text-red-400">{deathData?.killedBy}</span></p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center mx-auto border border-green-500/40">
+                        <svg className="w-10 h-10 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
+                      </div>
+                      <h2 className="text-5xl font-black text-green-500 uppercase italic tracking-tighter text-glow-green">Cashed Out</h2>
+                      <p className="text-gray-400 font-medium">Cash out complete.</p>
+                    </>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-4 py-8 border-y border-white/5">
+                    <div className="text-center">
+                      <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mb-1">Final Length</p>
+                      <p className="text-3xl font-mono text-white">{Math.floor(deathData?.length || 0)}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mb-1">
+                        {gameState === 'GAMEOVER' ? 'Pot Lost' : 'Total Cash Out'}
+                      </p>
+                      {gameState === 'CASHOUT_SUCCESS' ? (
+                        <div className="space-y-1">
+                          <p className="text-xs text-gray-400 line-through">
+                            Pot: {totalPotAmount.toFixed(4)} SOL
+                          </p>
+                          <p className="text-3xl font-mono text-green-400">
+                            +{lastEarnings.toFixed(4)} <span className="text-xs">SOL</span>
+                          </p>
+                          <p className="text-[8px] text-yellow-400">
+                            Fees: {(totalPotAmount - lastEarnings).toFixed(4)} SOL deducted
+                          </p>
+                        </div>
+                      ) : (
+                        <p className={`text-3xl font-mono ${gameState === 'GAMEOVER' ? 'text-red-400' : 'text-green-400'}`}>
+                          {gameState === 'GAMEOVER' ? '-' : '+'}{lastEarnings.toFixed(4)} <span className="text-xs">SOL</span>
+                        </p>
+                      )}
+                      {gameState === 'CASHOUT_SUCCESS' && (
+                        <div className="space-y-2 mt-2">
+                          <p className="text-[8px] text-gray-500 uppercase font-bold">Fees Applied:</p>
+                          <p className="text-[8px] text-gray-400">• 3% Entry Platform Fee</p>
+                          <p className="text-[8px] text-gray-400">• 1% Cashout Platform Fee</p>
+                          <p className="text-[8px] text-gray-400">• Network Gas Fees</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleBackToMenu}
+                    className="w-full bg-white text-black font-black py-5 rounded-2xl uppercase tracking-widest hover:bg-blue-500 hover:text-white transition-all transform active:scale-95 shadow-xl text-lg"
+                  >
+                    Back to Dashboard
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div id="game-container" className={`${gameState === 'PLAYING' ? 'block' : 'hidden'}`}></div>
+            {gameState === 'PLAYING' && <GameUI game={gameInstance} initialStake={activeStake} />}
+
+            <style>{`
+              .text-glow-red { text-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }
+              .text-glow-green { text-shadow: 0 0 10px rgba(34, 197, 94, 0.5); }
+            `}</style>
           </div>
-        </div>
-      )}
-
-      <div id="game-container" className={`${gameState === 'PLAYING' ? 'block' : 'hidden'}`}></div>
-      {gameState === 'PLAYING' && <GameUI game={gameInstance} initialStake={activeStake} />}
-
-      <style>{`
-        .text-glow-red { text-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }
-        .text-glow-green { text-shadow: 0 0 10px rgba(34, 197, 94, 0.5); }
-      `}</style>
-    </div>
+        } />
+      </Routes>
+    </Router>
   );
 };
 
