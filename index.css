@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background-color: #050505;
+  font-family: 'Inter', sans-serif;
+}
+
+#game-container {
+  width: 100vw;
+  height: 100vh;
+}
+
+canvas {
+  display: block;
+}

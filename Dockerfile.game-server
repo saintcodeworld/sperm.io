@@ -1,0 +1,32 @@
+# Sperm.io Game Server Dockerfile
+# Socket.io WebSocket Server
+
+FROM node:20-alpine
+
+# Install curl for healthcheck
+RUN apk add --no-cache curl
+
+WORKDIR /app
+
+# Copy package files for backend
+COPY backend/package*.json ./
+
+# Install dependencies
+RUN npm install --omit=dev
+
+# Copy backend source code
+COPY backend/ ./
+
+# Expose game server port
+EXPOSE 3002
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:3002/health || exit 1
+
+# Environment variables
+ENV NODE_ENV=production
+ENV PORT=3002
+
+# Start game server
+CMD ["node", "gameServer.js"]

@@ -1,0 +1,32 @@
+# Sperm.io API Server Dockerfile
+# PostgreSQL Backend API
+
+FROM node:20-alpine
+
+# Install curl for healthcheck
+RUN apk add --no-cache curl
+
+WORKDIR /app
+
+# Copy package files for backend
+COPY backend/package*.json ./
+
+# Install dependencies
+RUN npm install --omit=dev
+
+# Copy backend source code
+COPY backend/ ./
+
+# Expose API port
+EXPOSE 3001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3001/api/health || exit 1
+
+# Environment variables
+ENV NODE_ENV=production
+ENV API_PORT=3001
+
+# Start API server
+CMD ["node", "apiServer.js"]

@@ -1,0 +1,181 @@
+# Sperm.io Docker Compose Configuration
+# Production deployment for Coolify
+# DEBUG LOG: All services are configured with health checks
+
+version: '3.8'
+
+services:
+  # ============================================
+  # PostgreSQL Database
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: spermio-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-spermio}
+      POSTGRES_USER: ${DB_USER:-spermio_app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-spermio_secure_password_2025}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-spermio_app} -d ${DB_NAME:-spermio}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - spermio-network
+
+  # ============================================
+  # Redis (for session cache and game state recovery)
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: spermio-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-spermio_redis_2025}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-spermio_redis_2025}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - spermio-network
+
+  # ============================================
+  # API Server (PostgreSQL Backend)
+  # ============================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: spermio-api
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - API_PORT=3001
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-spermio}
+      - DB_USER=${DB_USER:-spermio_app}
+      - DB_PASSWORD=${DB_PASSWORD:-spermio_secure_password_2025}
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-me}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-spermio_redis_2025}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://spermiobeta.xyz,http://localhost:3000}
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - spermio-network
+
+  # ============================================
+  # Game Server (WebSocket/Socket.io)
+  # ============================================
+  game-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.game-server
+    container_name: spermio-game-server
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3002
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://spermiobeta.xyz,http://localhost:3000}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-spermio_redis_2025}
+    ports:
+      - "3002:3002"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - spermio-network
+
+  # ============================================
+  # Frontend (React + Vite)
+  # ============================================
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        - VITE_API_URL=${VITE_API_URL:-https://api.spermiobeta.xyz}
+        - VITE_GAME_SERVER_URL=${VITE_GAME_SERVER_URL:-https://game.spermiobeta.xyz}
+        - VITE_SOLANA_CLUSTER=${VITE_SOLANA_CLUSTER:-devnet}
+    container_name: spermio-frontend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+      - game-server
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - spermio-network
+
+  # ============================================
+  # Nginx Reverse Proxy (Optional - Coolify handles this)
+  # ============================================
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: spermio-nginx
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./nginx/ssl:/etc/nginx/ssl:ro
+  #   depends_on:
+  #     - frontend
+  #     - api
+  #     - game-server
+  #   networks:
+  #     - spermio-network
+
+# ============================================
+# Volumes
+# ============================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  spermio-network:
+    driver: bridge
