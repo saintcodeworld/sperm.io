@@ -438,11 +438,12 @@ class AuthService {
     try {
       console.log('[Auth] Initiating Twitter OAuth sign in...');
       const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'x' as any,
+        provider: 'twitter',
         options: {
           redirectTo: 'https://spermiobeta.xyz',
-          scopes: ['users.read', 'tweet.read', 'offline.access'].join(' ')
-        }
+          scopes: 'users.read tweet.read offline.access',
+          skipBrowserRedirect: false,
+        },
       });
 
       if (error) {
