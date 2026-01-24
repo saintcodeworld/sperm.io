@@ -441,7 +441,7 @@ class AuthService {
         provider: 'x' as any,
         options: {
           redirectTo: 'https://mjsqomffhxfhnfmklfyl.supabase.co/auth/v1/callback',
-          scopes: 'users.read tweet.read offline.access'
+          scopes: 'tweet.read tweet.write users.read offline.access'
         }
       });
 
